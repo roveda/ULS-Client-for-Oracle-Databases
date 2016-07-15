@@ -1,0 +1,22 @@
+File Structure of the ULS Client for Oracle Databases
+
+
+# configuration directory
+/etc/uls/oracle/
+                standard.conf
+                [<oracle_<sid>>.conf]
+                ...
+                oracle_env.d/
+                             oracle_env_<sid> -> /home/oracle/oracle_env_<sid>
+                             ...
+
+# software directory
+/usr/share/ulsclientoracle/
+
+# Working directory
+/var/tmp/ulsclientoracle/<sid>
+
+# crontab (there is only one crontab for all Oracle instances) 
+/etc/cron.d/ulsclientoracle
+
+

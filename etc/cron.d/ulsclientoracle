@@ -1,0 +1,2 @@
+# ULS Monitoring for Oracle Databases
+3-53/10 * * * * oracle /usr/share/ulsclientoracle/oracle_tests.sh --script=watch_oracle.pl >/dev/null 2>&1
