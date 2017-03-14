@@ -1,9 +1,9 @@
 #!/bin/bash
 #
-# oracle_tests.sh
+# watch_oracle.sh 
 #
 # ---------------------------------------------------------
-# Copyright 2016-2017, roveda
+# Copyright 2016, roveda
 #
 # This file is part of the 'ULS Client for Oracle'.
 #
@@ -23,14 +23,14 @@
 #
 # ---------------------------------------------------------
 # Synopsis:
-#   oracle_tests.sh  <script_to_execute>
+#   watch_oracle.sh  <environment_script>  <configuration_file>
 #
 # ---------------------------------------------------------
 # Description:
-#   Execute the <script_to_execute> for each environment 
-#   found in directory /etc/uls/oracle/oracle_env.d
+#   This script starts the watch_oracle.pl by invoking perl 
+#   and passes through any additional arguments to it.
 #
-#   Send any hints, wishes or bug reports to:
+#   Send any hints, feature requests or bug reports to:
 #     roveda at universal-logging-system.org
 #
 # ---------------------------------------------------------
@@ -38,9 +38,6 @@
 #
 # ---------------------------------------------------------
 # Dependencies:
-#
-#   Environment scripts in /etc/uls/oracle/oracle_env.d
-#   Standard configuration filt /etc/uls/oracle/standard.conf
 #
 # ---------------------------------------------------------
 # Restrictions:
@@ -61,48 +58,83 @@
 #   Created
 #
 # 2017-01-09      roveda      0.02
-#   Removed some parameters.
+#   Renamed to watch_oracle.sh
+#
 #
 #
 # ===================================================================
 
-USAGE="oracle_tests.sh  <script_to_execute>"
 
-WDIR="`dirname $0`"
+USAGE="watch_oracle.sh  <environment_script>  <configuration_file>"
 
-# Name of script to execute
-SCRIPT="$1"
+unset LC_ALL
+export LANG=C
 
-# Standardconfiguration for uls-client-oracle
-STDCONF="/etc/uls/oracle/standard.conf"
+cd `dirname $0`
 
-if [ ! -f "$STDCONF" ] ; then
-  echo "Error: configuration file '$STDCONF' does not exist => aborting script"
+# -----
+# Check number of arguments
+
+if [[ $# -ne 2 ]] ; then
+  echo "$USAGE"
   exit 1
 fi
 
 # -----
-# Default directory containing the environment scripts (or links to) 
-# of all installed Oracle database instances.
-ORAENVDIR="/etc/uls/oracle/oracle_env.d"
+# Set environment
 
-if [[ -d "$ORAENVDIR" ]] ; then
+ORAENV="$1"
 
-  # For all environment scripts in the directory.
-  for env_file in "$ORAENVDIR"/* ; do
-
-    # Start the script in background for each environment script found.
-    if [[ -r "$env_file" ]] ; then
-      "$WDIR"/$SCRIPT "$env_file" "$STDCONF" &
-    else
-      echo "Error: environment script '$env_file' not found, script '$SCRIPT' for this environment not executed."
-    fi
-
-  done
-else
-  echo "Error: directory '$ORAENVDIR' does not exist or is not readable => aborting script"
+if [[ ! -f "$ORAENV" ]] ; then
+  echo "Error: environment script '$ORAENV' not found => aborting script"
   exit 2
 fi
 
-exit 0
+. "$ORAENV"
+
+if [ $? -ne 0 ] ; then
+  echo 
+  echo "Error: Cannot source environment script '$ORAENV' => aborting script"
+  exit 2
+fi
+
+# -----
+# Check for configuration file
+
+CONFG="$2"
+
+if [[ ! -f "$CONFG" ]] ; then
+  echo
+  echo "Error: standard configuration file '$CONFG' not found => aborting script"
+  exit 2
+fi
+
+
+# -----
+# HOSTNAME is used, but normally not set in cronjobs
+
+HOSTNAME=`uname -n`
+export HOSTNAME
+
+# Remember to include the directory where flush_test_values can
+# be found ('/usr/bin' or '/usr/local/bin') in the PATH.
+
+
+# -----
+# Exit silently, if the TEST_BEFORE_RUN command does
+# not return the exit value 0.
+
+perl test_before_run.pl "$CONFG" > /dev/null 2>&1 || exit
+
+
+# -----
+# Call the script.
+
+# Set for decimal point, english messages and ISO date representation
+# (for this client only).
+# export NLS_LANG=AMERICAN_AMERICA.WE8ISO8859P1
+export NLS_LANG=AMERICAN_AMERICA.UTF8
+export NLS_DATE_FORMAT="YYYY-MM-DD hh24:mi:ss"
+
+perl watch_oracle.pl "$CONFG"
 

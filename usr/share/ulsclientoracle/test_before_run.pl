@@ -59,18 +59,24 @@
 # ---------------------------------------------------------
 # Versions:
 #
-# "@(#) test_before_run.pl   0.01   2013-08-18   roveda"
-#       Creation.
-# "@(#) test_before_run.pl   0.02   2013-08-24   roveda"
-#       Support no command as no tests necessary, exit(0)
-# "@(#) test_before_run.pl   0.03   2016-03-18   roveda"
-#       Added support for oracle_tools_SID.conf
-#       (This is a preparation for fully automatic updates of the oracle_tools)
-# "@(#) test_before_run.pl   0.04   2016-03-18   roveda"
-#       Changed the non-default configuration filename to <sid>.conf
+# date            name        version
+# ----------      ----------  -------
+#
+# 2013-08-18      roveda      0.01
+#   Creation.
+#
+# 2013-08-24      roveda      0.02
+#   Support no command as no tests necessary, exit(0)
+#
+# 2016-03-18      roveda      0.03
+#   Added support for oracle_tools_SID.conf
+#   (This is a preparation for fully automatic updates of the oracle_tools)
+#
+# 2016-03-18      roveda      0.04
+#   Changed the non-default configuration filename to <sid>.conf
 #
 #
-#        Change also $VERSION later in this script!
+#   Change also $VERSION later in this script!
 #
 # ===================================================================
 
@@ -81,7 +87,7 @@ use File::Basename;
 
 # These are my modules:
 use lib ".";
-use Misc 0.36;
+use Misc 0.40;
 
 my $VERSION = 0.04;
 

@@ -2,22 +2,22 @@
 # Uls2.pm  -  a perl module to generate value files to be processed by the ULS server
 #
 # ---------------------------------------------------------
-# Copyright 2004-2016, roveda
+# Copyright 2004-2017, roveda
 #
-# This file is part of the 'ULS Client for Oracle'.
+# This file is part of the 'Oracle OpTools'.
 #
-# The 'ULS Client for Oracle' is free software: you can redistribute it and/or modify
+# The 'Oracle OpTools' is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# The 'ULS Client for Oracle' is distributed in the hope that it will be useful,
+# The 'Oracle OpTools' is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with the 'ULS Client for Oracle'.  If not, see <http://www.gnu.org/licenses/>.
+# along with the 'Oracle OpTools'.  If not, see <http://www.gnu.org/licenses/>.
 #
 #
 # ---------------------------------------------------------
@@ -106,7 +106,7 @@
 #     HP-UX:   /opt/perl/lib/site_perl
 #     Windows: <LW>:\Perl\site\lib
 #
-#   or leave it in the installation directory of the the 'ULS Client for Oracle'.
+#   or leave it in the installation directory of the the 'Oracle OpTools'.
 #
 # ---------------------------------------------------------
 # Versions:
@@ -123,30 +123,44 @@
 # 2009-02-02, 1.02, roveda:
 #   Changed behavior in uls_settings() to 
 #   default -> /etc/uls/uls.conf -> environment variables -> configuration file
+#
 # 2009-03-16, 1.03, roveda:
 #   'source' does not work in all shells, now using '.'.
 #   Make the call to "flush_test_values" configurable in the conf file.
+#
 # 2009-03-20, 1.04, roveda:
 #   Minor changes concerning the determination of flush_test_values.
+#
 # 2010-01-22, 1.05, roveda:
 #   Debugged "nodup with elapsed".
+#
 # 2011-11-11, 1.06, roveda:
 #   Added the GPL.
+#
 # 2013-06-23, 1.10, roveda:
 #   Added the encoding
+#
 # 2013-08-17, 1.11, roveda
 #   Added support for the single configuration file in uls_settings()
+#
 # 2013-09-08, 1.12, roveda
 #   Added 'keep_for' retention time in sub uls_server_doc().
 #   Added current directory to look for own perl modules.
+#
 # 2014-01-14, 1.13, roveda
 #   Changed uls_settings() to evaluate the new ULS configuration file 
 #   entry ULS_TMP_PATH (previously: LOKALER_TEST_PFAD) correctly.
+#
 # 2014-05-06, 1.14, roveda
 #   Now deriving the standard encoding for output files from environment variable LANG.
+#
 # 2016-02-11, 1.15, roveda
 #   Checking first, if environment variable LANG exist before using it.
 #   Reference to latest Misc.pm version updated.
+#
+# 2017-02-26, 1.16, roveda
+#   Added more verbose output to copy_files() for better debugging.
+#   Reference to Misc.pm version 0.40 updated.
 #
 #
 #
@@ -170,7 +184,7 @@ require Exporter;
 
 @EXPORT = qw(set_uls_hostname set_uls_section set_uls_timestamp uls_counter uls_doc uls_file uls_flush uls_get_last_values uls_image uls_init uls_nvalues uls_nvalues_nodup uls_nvalues_unique uls_send_file_contents uls_server_doc uls_show uls_settings uls_teststep_doc uls_timing uls_value uls_value_nodup uls_value_unique);
 
-$VERSION = 1.15;
+$VERSION = 1.16;
 
 # ----------------------------------------------------------------
 # Perl modules
@@ -180,7 +194,7 @@ use File::Copy;
 # ----------------------------------------------------------------
 # Miscellaneous module (self developped)
 use lib ".";
-use Misc 0.35;
+use Misc 0.40;
 
 # ----------------------------------------------------------------
 # Path where the operating system uls settings are found
@@ -1617,7 +1631,7 @@ sub copy_files {
   #
   # copy_files(<directory>);
   #
-  # Copy all referenced files to the <director>.
+  # Copy all referenced files to the <directory>.
 
   title(sub_name());
 
@@ -1631,12 +1645,19 @@ sub copy_files {
     my $bn = shift(@FILES2);
     my $f = "$directory/$bn";
 
-    # File::Copy
-    copy($F, $f);
+    print "Copy file '$F' to '$f'.\n";
+
+    # copy() from File::Copy
+    my $success = copy($F, $f);
+    if ($success) {
+      print "File copy was successful.\n";
+    } else {
+      print STDERR sub_name() . ": Error: File copy was NOT successful: $!\n";
+    }
 
     # Test, if file exists in destination directory
     if (! -e $f) {
-      print STDERR sub_name() . ": Error: File '$F' could not be copied to '$f' => file is lost.";
+      print STDERR sub_name() . ": Error: File '$F' was not copied to '$f' => file is lost.";
     }
   } # foreach
 

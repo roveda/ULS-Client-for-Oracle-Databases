@@ -63,247 +63,336 @@
 # ---------------------------------------------------------
 # Versions:
 #
-# "@(#) watch_oracle9.pl   0.01   2004-06-24   roveda"
-# "@(#) watch_oracle9.pl   0.02   2004-06-31   roveda"
-#       Added 'buffer cache'
-#       messages from script run.
-# "@(#) watch_oracle9.pl   0.03   2004-07-06   roveda"
-#       Added redo(). Sending message at once to ULS when errors arise
-#       using output_error_message().
-# "@(#) watch_oracle9.pl   0.04   2004-07-15   roveda"
-#       Added $VERSION.
-# "@(#) watch_oracle9.pl   0.05   2004-07-22   roveda"
-#       Added LOCK file checking. This script checks if a lock file exists
-#       and aborts silently.
-# "@(#) watch_oracle9.pl   0.06   2004-07-28   roveda"
-#       Re-activated 'overallocation count' in pga(),
-#       Sending the hostname along (interesting for clusters).
-# "@(#) watch_oracle9.pl   0.07   2004-08-19   roveda"
-#       Test status of redo log member files.
-#       Now putting my own process id into LOCK file. Next running
-#       instance checks if according process is still running, deleting
-#       the LOCK file if not.
-# "@(#) watch_oracle9.pl   0.08   2004-08-20   roveda"
-#       Sending the documentation in each sub now, using a prepared
-#       hash to keep the texts. Lockfile moved to misc_lib.pm
-#       'active transactions' and 'number of extents' are only snapshots,
-#       not summarized.
-# "@(#) watch_oracle9.pl   0.09   2004-10-13   roveda"
-#       tablespace_info() changed. library_cache() changed.
-#       Documentation added.
-# "@(#) watch_oracle9.pl   0.10   2004-11-01   roveda"
-#       "total bytes processed" debugged in pga().
-#       "redo size" in redo_logs() is now calculated as difference to last run.
-# "@(#) watch_oracle9.pl   0.11   2004-12-09   roveda"
-#       Moved to "start-stop", IDENTIFIER, "script name, version" and
-#       uses now send_runtime(). Obsolete variables removed.
-# "@(#) watch_oracle9.pl   0.12   2005-01-13   roveda"
-#       Documentation to tablespace_info now sent for each tablespace, it
-#       was not accessible until then.
-# "@(#) watch_oracle9.pl   0.13   2005-02-28   roveda"
-#       Added "buffer cache/used".
-# "@(#) watch_oracle9.pl   0.14   2005-03-09   roveda"
-#       Changed buffer_cache() for Oracle 10g.
-#       Added some docs for "system statistics".
-# "@(#) watch_oracle9.pl   0.15   2005-03-30   roveda"
-#       Scanning of alert.log now only uses complete lines (terminated with '\n').
-#       That should fix the problems with concurrent writing and reading.
-# "@(#) watch_oracle.pl   0.16   2005-04-07   roveda"
-#       New script name, buffer cache hit ratio has other formula
-#       for 10g. Changed to simpler sql statement for tablespace
-#       usage.
-# "@(#) watch_oracle.pl   0.17   2005-04-20   roveda"
-#       Added 'database available' (0% / 100%) to 'Info'.
-# "@(#) watch_oracle.pl   0.18   2005-05-10   roveda"
-#       Removed the "backslash" print out in alert_log()
-# "@(#) watch_oracle.pl   0.19   2005-08-01   roveda"
-#       Now uses Misc.pm and Uls.pm, returns the exit code to the
-#       calling context.
-# "@(#) watch_oracle.pl   0.20   2005-08-16   roveda"
-#       Added some SETs to exec_sql(). Remove LOCK file at the very end
-#       of the script. Specific wait events are sent to the ULS.
-# "@(#) watch_oracle.pl   0.21   2005-09-20   roveda"
-#       Calculation of free temp tablespace corrected.
-#       Real script name is sent to ULS.
-# "@(#) watch_oracle.pl   0.22   2005-11-25   roveda"
-#       Using now scheduled() instead of elapsed().
-#       Added parameters(), added objects_in_buffer_cache().
-#       Accepts now BUFFER_OBJECTS as parameter, then generates
-#       a buffer statistic about its objects.
-# "@(#) watch_oracle.pl   0.23   2005-12-01   roveda"
-#       Added "consistent gets" to system_statistics(), added documentation.
-# "@(#) watch_oracle.pl   0.24   2006-01-31   roveda"
-#       Added "maximum PGA allocated" to pga(). Buffer cache hit ratio is now
-#       limited to [0.0 .. 100.0]. wait_events() overview removed.
-#       Added latch()
-# "@(#) watch_oracle.pl   0.25   2006-02-07   roveda"
-#       The sqlplus command is now enclosed in " (double quotes) instead
-#       of ' (single quote). This was necessary for running on Wind*ws.
-#       Do not use "n/a" if a value cannot be determined, do not send anything
-#       (a mix of data types irritates the graphics module). Messages in the
-#       alertSID.log are now sent for detail "entry".
-# "@(#) watch_oracle.pl   0.26   2006-04-25   roveda"
-#       Added recalc() especially for "redo size", which wraps at 4294967296 (4G)
-#       and starts again at zero. The previously negative values are now
-#       calculated correctly. wait_events() now gets all appearing events,
-#       but WAIT_EVENTS must be specified as parameter when starting the script.
-#       Library cache values are only sent if one value differs from zero.
-#       Skipped several not so interesting values in sga()
-# "@(#) watch_oracle.pl   0.27   2006-06-09   roveda"
-#       Using long strings now in send_parameters().
-# "@(#) watch_oracle.pl   0.28   2006-06-26   roveda"
-#       Use the "sum of size of all user objects" as used space of
-#       temporary tablespaces (the used space is only returned on demand (lazy).
-# "@(#) watch_oracle.pl   0.29   2006-09-07   roveda"
-#       "written to rollback segment" now wraps numerically correct at 4G.
-#       tablespace_usage()-used was wrong, when no objects exist in a tablespace.
-# "@(#) watch_oracle.pl   0.30   2006-09-20   roveda"
-#       Now supports correct values for buffer caches when using
-#       use_indirect_data_buffers (1GB more for 32bit linux).
-# "@(#) watch_oracle.pl   0.31   2006-09-25   roveda"
-#       Added 'execute count' and 'parse count (total)' to system_statistics().
-#       Changed several sprintf() to the new function pround() and needs
-#       therefore the latest Misc.pm version (and the latest Uls.pm).
-# "@(#) watch_oracle.pl   0.32   2007-03-07   roveda"
-#       Checking tablespaces for "is autoextensible". Corrected "free" for
-#       "tablespace usage". Added "open cursors" and "session cached cursors".
-#       Check alert.log also for expression "Errors in file...", which
-#       sometimes does not generate an ORA- message.
-# "@(#) watch_oracle.pl   0.33   2007-03-07   roveda"
-#       Number of autoextensible temp files was always zero, corrected.
-# "@(#) watch_oracle.pl   0.34   2007-05-22   roveda"
-#       Do not send values to the ULS if work files have been freshly
-#       built or the first run after a database bounce. Write temporary
-#       and work files to directory specified in ULS_VAR_DIR or to
-#       current directory if ULS_VAR_DIR is not specified. You may
-#       specify a --configuration-file as parameter. You may specify
-#       SQLPLUS_COMMAND in the configuration file, if it is not the
-#       default 'sqlplus "/ as sysdba"' that works (mostly on Wind*ws).
-# "@(#) watch_oracle.pl   0.35   2007-06-15   roveda"
-#       Added jobs() (see OPTIONS = ...JOBS in the configuration file).
-#       Zeroed the rightmost second of the ULS timestamp. Added support
-#       for HTTPS environment settings.
-# "@(#) watch_oracle.pl   0.36   2007-09-11   roveda"
-#       This script now needs! a configuration file, which must be
-#       the first command line parameter. It needs also the latest
-#       versions of Misc.pm (0.22) and Uls.pm (0.21).
-# "@(#) watch_oracle.pl   0.37   2008-09-17   roveda"
-#       IDENTIFIER is now used in WORKFILEPREFIX. That allows several
-#       separate watch_oracle scripts per instance.
-# "@(#) watch_oracle.pl   0.38   2009-01-30   roveda"
-#       Changed to Uls2.pm and usage with ULS-Server 1.5.3 and uls-client-2.0-1.
-#       Added support for Oracle 11. Number of redo log switches,
-#       components, scheduler.
-# "@(#) watch_oracle.pl   0.39   2009-02-17   roveda"
-#       alert.log for Oracle 11 from v$diag_info. Buffer cache hit ratio
-#       is equal to Oracle 10.
-# "@(#) watch_oracle.pl   0.40   2009-03-19   roveda"
-#       Added the number of (not only auto-extensible) datafiles per tablespace.
-#       Added doc to library cache. Excerpt of trace file is send in conjunction 
-#       with "Errors in file ...". NLS_DATABASE_SETTINGS are sent once a day.
-#       <file>.nineoclock replaces <file>.last_doc_sent and <file>.last_parameters.
-# "@(#) watch_oracle.pl   0.41   2009-06-15   roveda"
-#       "set linesize 5000" in sub exec_sql(), because at least v$parameter has 
-#       value of 4000 lemgth.
-# "@(#) watch_oracle.pl   0.42   2009-12-29   roveda"
-#       Now removing old temporary log files correctly. Added flashback partially.
-#       "objects" in "buffer cache" are now shown in MB. Leaving out 'other' wait class.
-#       Added excerpt of Oracle doc for several wait events. Omitted the 
-#       "Info -- database available". Some values are only sent every DEFAULT_ELAPSED, 
-#       if the value is equal to the previous value.
-# "@(#) watch_oracle.pl   0.43   2010-02-18   roveda"
-#       Changed "jobs" to a newmore verbose output.
-# "@(#) watch_oracle.pl   0.44   2010-02-25   roveda"
-#       Debugged get_objects_in_buffer() for databases with partitioning.
-# "@(#) watch_oracle.pl   0.45   2010-03-08   roveda"
-#       rollback_segment_summary() is to be activated optionally, now 
-#       undo_usage() has been implemented instead (work in progress).
-#       Added banner output to general_info() to show what Oracle version is in use.
-#       Added "corrupt block" as search expression for alert.log
-#       (got that 2010-03-31, no ORA-, though)
-# "@(#) watch_oracle.pl   0.46   2010-09-27   roveda"
-#       Removed obsolete "Ok" and 0 values sent to the ULS-server before 
-#       "instant limit definition on incoming values" was implemented.
-#       The limits on the ULS-server must be changed! See "ULS-0018DE-03W ORACLE_TOOLS".
-# "@(#) watch_oracle.pl   0.47   2010-12-30   roveda"
-#       Removed tablespace_info(), parameters(), nls_settings(), components(),
-#       banner output, because these information are gathered when running 
-#       script ora_dbinfo_xxx.
-# "@(#) watch_oracle.pl   0.49   2011-03-03   roveda"
-#       Debugged a division by zero in wait_event_classes(),
-#       Debugged the determination of alert.log's directory for Oracle 11.
-# "@(#) watch_oracle.pl   0.50   2011-11-11   roveda"
-#       Added GPL license.
-# "@(#) watch_oracle.pl   0.51   2011-12-21   roveda"
-#       Added scheduler_details(). ORACLE_MAJOR_VERSION and ORACLE_MINOR_VERSION 
-#       are available throughout the script as integers. That allows easy check 
-#       for version specific distinction.
-# "@(#) watch_oracle.pl   0.52   2012-04-27   roveda"
-#       Added cpu used to scheduler job details.
-# "@(#) watch_oracle.pl   0.53   2013-02-10   roveda"
-#       Disabled the BUFFER_OBJECTS option, because of incorrect sql.
-#       Added the number of failed logins if audit_trail is set.
-# "@(#) watch_oracle.pl   0.54   2013-08-10   roveda"
-#       Changed the linesize from 10000 to 32000, v$parameter seem to 
-#       contain longer lines, the appropriate results were missing.
-# "@(#) watch_oracle.pl   0.55   2013-08-17   roveda"
-#       Modifications to match the new single configuration file.
-# "@(#) watch_oracle.pl   0.56   2014-02-02   roveda"
-#       Changed several sql statements to use bind variables instead of 
-#       dynamically produced expressions which require hard parsing.
-#       Simplified the determination of the tablespace usage in tablespace_usage().
-# "@(#) watch_oracle.pl   0.57   2014-02-03   roveda"
-#       Changed some more sql statements to use bind variables.
-#       Debugged wrong sql statement in audit_information()
-# "@(#) watch_oracle.pl   0.58   2014-08-10   roveda"
-#       Changed some more sql commands to use bind variables.
-#       Switched the columns in the failed login report.
-# "@(#) watch_oracle.pl   0.59   2014-11-11   roveda"
-#       Sending "max processes" before other process and session related values.
-#       That avoids notifications for the first run of this script.
-#       All backslashes are converted to dots in sub audit_information().
-#       Made the options global (OPTIONS) to use it in subs.
-#       Teststep documentation is now found correctly, titles are converted to lowercase.
-#       Added missing documentation sections, removed outdated.
-# "@(#) watch_oracle.pl   0.60   2015-02-14   roveda"
-#       Debugged a wrong number of array elements in scheduler_details().
-#       Added "exit value" as final numerical result (0 = "OK"),
-#       in contrast to "message" which is the final result as text.
-#       That allows numerical combined limits like:
-#       notify, if two of the last three executions have failed.
-#       Debugged scheduler_details(): scheduled jobs running longer than the execution
-#       cycle of this script were omitted/not recognized.
-# "@(#) watch_oracle.pl   0.61   2015-05-05   roveda"
-#       Added NVL() to some select commands.
-# "@(#) watch_oracle.pl   0.62   2015-09-16   roveda"
-#       Added the successful logins in audit_information().
-# "@(#) watch_oracle.pl   0.63   2015-09-24   roveda"
-#       Re-worked the sql command for successful and failed logins.
-# "@(#) watch_oracle.pl   0.64   2015-12-13   roveda"
-#       Changed some units from ' ' to '[ ]'.
-#       Info about flashback is only sent if activated.
-#       Infos about detailed library cache only on demand.
-#       Infos about wait event classes only on demand.
-#       Start-Stop omitted.
-# "@(#) watch_oracle.pl   0.65   2016-02-04   roveda"
-#       Some values only once a day, changed nine_o_clock to ONCE_A_DAY.
-# "@(#) watch_oracle.pl   0.66   2016-02-24   roveda"
-#       Added TNSPING as check.
-#       The "exit value" is no longer sent to ULS.
-# "@(#) watch_oracle.pl   0.67   2016-03-17   roveda"
-#       If any value for general_info() changes, send all values.
-#       Added support for oracle_tools_SID.conf
-#       (This is a preparation for fully automatic updates of the oracle_tools)
-# "@(#) watch_oracle.pl   0.68   2016-03-23   roveda"
-#       Added the SID to the WORKFILEPREFIX.
-# "@(#) watch_oracle.pl   0.69   2016-05-31   roveda"
-#       Changed from MB to GB for tablespace sizes and usage.
-#       Added the theoretical maxsize of a tablespace.
-# "@(#) watch_oracle.pl   0.70   2016-07-03   roveda"
-#       Changed the non-default configuration filename to <sid>.conf
+#
+# date            name        version
+# ----------      ----------  -------
+# 2004-06-24      roveda      0.01
+#
+# 2004-06-31      roveda      0.02
+#   Added 'buffer cache'
+#   messages from script run.
+#
+# 2004-07-06      roveda      0.03
+#   Added redo(). Sending message at once to ULS when errors arise
+#   using output_error_message().
+#
+# 2004-07-15     roveda      0.04
+#   Added $VERSION.
+#
+# 2004-07-22      roveda      0.05
+#   Added LOCK file checking. This script checks if a lock file exists
+#   and aborts silently.
+#
+# 2004-07-28      roveda      0.06
+#   Re-activated 'overallocation count' in pga(),
+#   Sending the hostname along (interesting for clusters).
+#
+# 2004-08-19      roveda      0.07
+#   Test status of redo log member files.
+#   Now putting my own process id into LOCK file. Next running
+#   instance checks if according process is still running, deleting
+#   the LOCK file if not.
+#
+# 2004-08-20      roveda      0.08
+#   Sending the documentation in each sub now, using a prepared
+#   hash to keep the texts. Lockfile moved to misc_lib.pm
+#   'active transactions' and 'number of extents' are only snapshots,
+#   not summarized.
+#
+# 2004-10-13      roveda      0.09
+#   tablespace_info() changed. library_cache() changed.
+#   Documentation added.
+#
+# 2004-11-01      roveda      0.10
+#   "total bytes processed" debugged in pga().
+#   "redo size" in redo_logs() is now calculated as difference to last run.
+#
+# 2004-12-09      roveda      0.11
+#   Moved to "start-stop", IDENTIFIER, "script name, version" and
+#   uses now send_runtime(). Obsolete variables removed.
+#
+# 2005-01-13      roveda      0.12
+#   Documentation to tablespace_info now sent for each tablespace, it
+#   was not accessible until then.
+#
+# 2005-02-28      roveda      0.13
+#   Added "buffer cache/used".
+#
+# 2005-03-09      roveda      0.14
+#   Changed buffer_cache() for Oracle 10g.
+#   Added some docs for "system statistics".
+#
+# 2005-03-30      roveda      0.15
+#   Scanning of alert.log now only uses complete lines (terminated with '\n').
+#   That should fix the problems with concurrent writing and reading.
+#
+# 2005-04-07      roveda      0.16
+#   New script name, buffer cache hit ratio has other formula
+#   for 10g. Changed to simpler sql statement for tablespace
+#   usage.
+#
+# 2005-04-20      roveda      0.17
+#   Added 'database available' (0% / 100%) to 'Info'.
+#
+# 2005-05-10      roveda      0.18
+#   Removed the "backslash" print out in alert_log()
+#
+# 2005-08-01      roveda      0.19
+#   Now uses Misc.pm and Uls.pm, returns the exit code to the
+#   calling context.
+#
+# 2005-08-16      roveda      0.20
+#   Added some SETs to exec_sql(). Remove LOCK file at the very end
+#   of the script. Specific wait events are sent to the ULS.
+#
+# 2005-09-20      roveda      0.21
+#   Calculation of free temp tablespace corrected.
+#   Real script name is sent to ULS.
+#
+# 2005-11-25      roveda      0.22
+#   Using now scheduled() instead of elapsed().
+#   Added parameters(), added objects_in_buffer_cache().
+#   Accepts now BUFFER_OBJECTS as parameter, then generates
+#   a buffer statistic about its objects.
+#
+# 2005-12-01      roveda      0.23
+#   Added "consistent gets" to system_statistics(), added documentation.
+#
+# 2006-01-31      roveda      0.24
+#   Added "maximum PGA allocated" to pga(). Buffer cache hit ratio is now
+#   limited to [0.0 .. 100.0]. wait_events() overview removed.
+#   Added latch()
+#
+# 2006-02-07      roveda      0.25
+#   The sqlplus command is now enclosed in " (double quotes) instead
+#   of ' (single quote). This was necessary for running on Wind*ws.
+#   Do not use "n/a" if a value cannot be determined, do not send anything
+#   (a mix of data types irritates the graphics module). Messages in the
+#   alertSID.log are now sent for detail "entry".
+#
+# 2006-04-25      roveda      0.26
+#   Added recalc() especially for "redo size", which wraps at 4294967296 (4G)
+#   and starts again at zero. The previously negative values are now
+#   calculated correctly. wait_events() now gets all appearing events,
+#   but WAIT_EVENTS must be specified as parameter when starting the script.
+#   Library cache values are only sent if one value differs from zero.
+#   Skipped several not so interesting values in sga()
+#
+# 2006-06-09      roveda      0.27
+#   Using long strings now in send_parameters().
+#
+# 2006-06-26      roveda      0.28
+#   Use the "sum of size of all user objects" as used space of
+#   temporary tablespaces (the used space is only returned on demand (lazy).
+#
+# 2006-09-07      roveda      0.29
+#   "written to rollback segment" now wraps numerically correct at 4G.
+#   tablespace_usage()-used was wrong, when no objects exist in a tablespace.
+#
+# 2006-09-20      roveda      0.30
+#   Now supports correct values for buffer caches when using
+#   use_indirect_data_buffers (1GB more for 32bit linux).
+#
+# 2006-09-25      roveda      0.31
+#   Added 'execute count' and 'parse count (total)' to system_statistics().
+#   Changed several sprintf() to the new function pround() and needs
+#   therefore the latest Misc.pm version (and the latest Uls.pm).
+#
+# 2007-03-07      roveda      0.32
+#   Checking tablespaces for "is autoextensible". Corrected "free" for
+#   "tablespace usage". Added "open cursors" and "session cached cursors".
+#   Check alert.log also for expression "Errors in file...", which
+#   sometimes does not generate an ORA- message.
+#
+# 2007-03-07      roveda      0.33
+#   Number of autoextensible temp files was always zero, corrected.
+#
+# 2007-05-22      roveda      0.34
+#   Do not send values to the ULS if work files have been freshly
+#   built or the first run after a database bounce. Write temporary
+#   and work files to directory specified in ULS_VAR_DIR or to
+#   current directory if ULS_VAR_DIR is not specified. You may
+#   specify a --configuration-file as parameter. You may specify
+#   SQLPLUS_COMMAND in the configuration file, if it is not the
+#   default 'sqlplus "/ as sysdba"' that works (mostly on Wind*ws).
+#
+# 2007-06-15      roveda      0.35
+#   Added jobs() (see OPTIONS = ...JOBS in the configuration file).
+#   Zeroed the rightmost second of the ULS timestamp. Added support
+#   for HTTPS environment settings.
+#
+# 2007-09-11      roveda      0.36
+#   This script now needs! a configuration file, which must be
+#   the first command line parameter. It needs also the latest
+#   versions of Misc.pm (0.22) and Uls.pm (0.21).
+#
+# 2008-09-17      roveda      0.37
+#   IDENTIFIER is now used in WORKFILEPREFIX. That allows several
+#   separate watch_oracle scripts per instance.
+#
+# 2009-01-30      roveda      0.38
+#   Changed to Uls2.pm and usage with ULS-Server 1.5.3 and uls-client-2.0-1.
+#   Added support for Oracle 11. Number of redo log switches,
+#   components, scheduler.
+#
+# 2009-02-17      roveda      0.39
+#   alert.log for Oracle 11 from v$diag_info. Buffer cache hit ratio
+#   is equal to Oracle 10.
+#
+# 2009-03-19      roveda      0.40
+#   Added the number of (not only auto-extensible) datafiles per tablespace.
+#   Added doc to library cache. Excerpt of trace file is send in conjunction
+#   with "Errors in file ...". NLS_DATABASE_SETTINGS are sent once a day.
+#   <file>.nineoclock replaces <file>.last_doc_sent and <file>.last_parameters.
+#
+# 2009-06-15      roveda      0.41
+#   "set linesize 5000" in sub exec_sql(), because at least v$parameter has
+#   value of 4000 lemgth.
+#
+# 2009-12-29      roveda      0.42
+#   Now removing old temporary log files correctly. Added flashback partially.
+#   "objects" in "buffer cache" are now shown in MB. Leaving out 'other' wait class.
+#   Added excerpt of Oracle doc for several wait events. Omitted the
+#   "Info -- database available". Some values are only sent every DEFAULT_ELAPSED,
+#   if the value is equal to the previous value.
+#
+# 2010-02-18      roveda      0.43
+#   Changed "jobs" to a newmore verbose output.
+#
+# 2010-02-25      roveda      0.44
+#   Debugged get_objects_in_buffer() for databases with partitioning.
+#
+# 2010-03-08      roveda      0.45
+#   rollback_segment_summary() is to be activated optionally, now
+#   undo_usage() has been implemented instead (work in progress).
+#   Added banner output to general_info() to show what Oracle version is in use.
+#   Added "corrupt block" as search expression for alert.log
+#   (got that 2010-03-31, no ORA-, though)
+#
+# 2010-09-27      roveda      0.46
+#   Removed obsolete "Ok" and 0 values sent to the ULS-server before
+#   "instant limit definition on incoming values" was implemented.
+#   The limits on the ULS-server must be changed! See "ULS-0018DE-03W ORACLE_TOOLS".
+#
+# 2010-12-30      roveda      0.47
+#   Removed tablespace_info(), parameters(), nls_settings(), components(),
+#   banner output, because these information are gathered when running
+#   script ora_dbinfo_xxx.
+#
+# 2011-03-03      roveda      0.49
+#   Debugged a division by zero in wait_event_classes(),
+#   Debugged the determination of alert.log's directory for Oracle 11.
+#
+# 2011-11-11      roveda      0.50
+#   Added GPL license.
+#
+# 2011-12-21      roveda      0.51
+#   Added scheduler_details(). ORACLE_MAJOR_VERSION and ORACLE_MINOR_VERSION
+#   are available throughout the script as integers. That allows easy check
+#   for version specific distinction.
+#
+# 2012-04-27      roveda      0.52
+#   Added cpu used to scheduler job details.
+#
+# 2013-02-10      roveda      0.53
+#   Disabled the BUFFER_OBJECTS option, because of incorrect sql.
+#   Added the number of failed logins if audit_trail is set.
+#
+# 2013-08-10      roveda      0.54
+#   Changed the linesize from 10000 to 32000, v$parameter seem to
+#   contain longer lines, the appropriate results were missing.
+#
+# 2013-08-17      roveda      0.55
+#   Modifications to match the new single configuration file.
+#
+# 2014-02-02      roveda      0.56
+#   Changed several sql statements to use bind variables instead of
+#   dynamically produced expressions which require hard parsing.
+#   Simplified the determination of the tablespace usage in tablespace_usage().
+#
+# 2014-02-03      roveda      0.57
+#   Changed some more sql statements to use bind variables.
+#   Debugged wrong sql statement in audit_information()
+#
+# 2014-08-10      roveda      0.58
+#   Changed some more sql commands to use bind variables.
+#   Switched the columns in the failed login report.
+#
+# 2014-11-11      roveda      0.59
+#   Sending "max processes" before other process and session related values.
+#   That avoids notifications for the first run of this script.
+#   All backslashes are converted to dots in sub audit_information().
+#   Made the options global (OPTIONS) to use it in subs.
+#   Teststep documentation is now found correctly, titles are converted to lowercase.
+#   Added missing documentation sections, removed outdated.
+#
+# 2015-02-14      roveda      0.60
+#   Debugged a wrong number of array elements in scheduler_details().
+#   Added "exit value" as final numerical result (0 = "OK"),
+#   in contrast to "message" which is the final result as text.
+#   That allows numerical combined limits like:
+#   notify, if two of the last three executions have failed.
+#   Debugged scheduler_details(): scheduled jobs running longer than the execution
+#   cycle of this script were omitted/not recognized.
+#
+# 2015-05-05      roveda      0.61
+#   Added NVL() to some select commands.
+#
+# 2015-09-16      roveda      0.62
+#   Added the successful logins in audit_information().
+#
+# 2015-09-24      roveda      0.63
+#   Re-worked the sql command for successful and failed logins.
+#
+# 2015-12-13      roveda      0.64
+#   Changed some units from ' ' to '[ ]'.
+#   Info about flashback is only sent if activated.
+#   Infos about detailed library cache only on demand.
+#   Infos about wait event classes only on demand.
+#   Start-Stop omitted.
+#
+# 2016-02-04      roveda      0.65
+#   Some values only once a day, changed nine_o_clock to ONCE_A_DAY.
+#
+# 2016-02-24      roveda      0.66
+#   Added TNSPING as check.
+#   The "exit value" is no longer sent to ULS.
+#
+# 2016-03-17      roveda      0.67
+#   If any value for general_info() changes, send all values.
+#   Added support for oracle_tools_SID.conf
+#   (This is a preparation for fully automatic updates of the oracle_tools)
+#
+# 2016-03-23      roveda      0.68
+#   Added the SID to the WORKFILEPREFIX.
+#
+# 2016-05-31      roveda      0.69
+#   Changed from MB to GB for tablespace sizes and usage.
+#   Added the theoretical maxsize of a tablespace.
+#
+# 2016-07-03      roveda      0.70
+#   Changed the non-default configuration filename to <sid>.conf
+#
+# 2016-12-19      roveda      0.71
+#   Corrected the documentation lookup expression for "Session Cached Cursors"
+#
+# 2017-02-09      roveda      0.72
+#   Added schema_information() as new feature.
+#
+# 2017-02-16      roveda      0.73
+#   Removed 'last execution before' in jobs(), it is useless.
+#   Added 'administrative database user' as new teststep. 
+#   Count and list is sent once a day.
+#
+# 2017-02-24      roveda      0.74
+#   In case of an unknown state of the database, the following execution of 
+#   the script did not deliver the correct values for the "Info" details, 
+#   it was not saved to the workfile. Now, undefined values are written to 
+#   the workfile if the sql commands could not be executed or the database 
+#   is not available.
 #
 #
-#        Change also $VERSION later in this script!
+#   Change also $VERSION later in this script!
 #
 # ===================================================================
 
@@ -316,10 +405,10 @@ use File::Copy;
 
 # These are my modules:
 use lib ".";
-use Misc 0.36;
-use Uls2 1.14;
+use Misc 0.40;
+use Uls2 1.15;
 
-my $VERSION = 0.70;
+my $VERSION = 0.74;
 
 # ===================================================================
 # The "global" variables
@@ -762,31 +851,65 @@ sub general_info {
   # Will be 1, if any of the values has changed since last run.
   my $something_has_changed = 0;
 
-  my $db_status = "unknown";
+  # Values from this run
+  my $db_status           = "unknown";
+  my $hostname            = "";
+  my $instname            = "";
+  my $logmode             = "";
+  my $instance_startup_at = iso_datetime();
+  $WORKFILE_TIMESTAMP = $instance_startup_at;
 
   # ----- Check if Oracle is available
   my $sql = "select 'database status', status from v\$instance;";
+
+  my $abort_msg = "";
 
   if (exec_sql($sql)) {
     if (! errors_in_file($TMPOUT1)) {
 
       $db_status = trim(get_value($TMPOUT1, $DELIM, "database status"));
 
-      if ( ($db_status ne $oracle_status_last) || ($ONCE_A_DAY) ) { $something_has_changed = 1 }
+      if ( ($ONCE_A_DAY)                   ) { $something_has_changed = 1 }
+      if ($db_status ne $oracle_status_last) { $something_has_changed = 1 }
 
     } else {
-      uls_value($ts, "database status", "unknown" , "[ ]");
-      output_error_message(sub_name() . ": Error: there have been errors when executing the sql statement.");
-      uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
-      return(0);
+      $abort_msg = "Error: there have been errors when executing the sql statement.";
     }
   } else {
-    # It is a fatal error if that value cannot be derived.
-    uls_value($ts, "database status", "unknown" , "[ ]");
-    output_error_message(sub_name() . ": Error: Cannot execute sql statement.");
-    uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
-    return(0);
+    $abort_msg = "Error: Cannot execute sql statement.";
   }
+
+  # -----------------------------------------------------------------
+  if ($abort_msg ne "") {
+    # ABORT SCRIPT
+
+    # It is a fatal error if that value cannot be derived.
+    uls_value($ts, "database status", $db_status, "[ ]");
+    output_error_message(sub_name() . ": $abort_msg");
+    uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
+
+    my @WF = (
+      "database status${DELIM}$db_status${DELIM}", 
+      "oracle version${DELIM}$ORACLE_VERSION${DELIM}", 
+      "hostname${DELIM}$hostname${DELIM}", 
+      "instance name${DELIM}$instname${DELIM}", 
+      "database log mode${DELIM}$logmode${DELIM}", 
+      "instance startup at${DELIM}$instance_startup_at${DELIM}"
+    );
+
+    print "\n";
+    print "General info for next run:\n";
+    print join("\n", @WF), "\n";
+    print "-----\n";
+    write2file($TMPOUT1, join("\n", @WF) . "\n");
+
+    # Build the value file with the current values.
+    make_value_file($TMPOUT1, $workfile, $WORKFILE_TIMESTAMP, $DELIM, 1);
+
+    return(0);
+  } # ABORT SCRIPT
+  # -----------------------------------------------------------------
+
 
   # ----- More information
   $sql = "
@@ -805,42 +928,50 @@ sub general_info {
   $ORACLE_MAJOR_VERSION = int($ORACLE_MAJOR_VERSION);
   $ORACLE_MINOR_VERSION = int($ORACLE_MINOR_VERSION);
 
-  my $hostname        = trim(get_value($TMPOUT1, $DELIM, "hostname"));
-  my $instname        = trim(get_value($TMPOUT1, $DELIM, "instance name"));
-  $WORKFILE_TIMESTAMP = trim(get_value($TMPOUT1, $DELIM, "instance startup at"));
-  my $logmode         = trim(get_value($TMPOUT1, $DELIM, "database log mode"));
+  $hostname            = trim(get_value($TMPOUT1, $DELIM, "hostname"));
+  $instname            = trim(get_value($TMPOUT1, $DELIM, "instance name"));
+  $instance_startup_at = trim(get_value($TMPOUT1, $DELIM, "instance startup at"));
+  $WORKFILE_TIMESTAMP = $instance_startup_at;
+  $logmode             = trim(get_value($TMPOUT1, $DELIM, "database log mode"));
 
-  if ( ($ORACLE_VERSION ne $oracle_version_last)          || $ONCE_A_DAY ) { $something_has_changed = 1 }
-  if ( ($hostname ne $hostname_last)                      || $ONCE_A_DAY ) { $something_has_changed = 1 }
-  if ( ($instname ne $instname_last)                      || $ONCE_A_DAY ) { $something_has_changed = 1 }
-  if ( ($logmode ne $logmode_last)                        || $ONCE_A_DAY ) { $something_has_changed = 1 }
-  if ( ($WORKFILE_TIMESTAMP ne $instance_startup_at_last) || $ONCE_A_DAY ) { $something_has_changed = 1 }
+  if ($ONCE_A_DAY                                       ) { $something_has_changed = 1 }
+  if ($ORACLE_VERSION      ne $oracle_version_last      ) { $something_has_changed = 1 }
+  if ($hostname            ne $hostname_last            ) { $something_has_changed = 1 }
+  if ($instname            ne $instname_last            ) { $something_has_changed = 1 }
+  if ($logmode             ne $logmode_last             ) { $something_has_changed = 1 }
+  if ($instance_startup_at ne $instance_startup_at_last ) { $something_has_changed = 1 }
 
   if ( $something_has_changed ) {
+    # Send all values to ULS.
     uls_value($ts, "database status", $db_status, "[ ]");
     uls_value($ts, "oracle version", $ORACLE_VERSION, "[ ]");
     uls_value($ts, "hostname", $hostname, "[ ]");
     uls_value($ts, "instance name", $instname, "[ ]");
     uls_value($ts, "database log mode", $logmode, "[ ]");
-    uls_value($ts, "instance startup at", $WORKFILE_TIMESTAMP, "{DT}");
+    uls_value($ts, "instance startup at", $instance_startup_at, "{DT}");
   }
 
-  my $wf = "database status${DELIM}$db_status${DELIM}
-oracle version${DELIM}$ORACLE_VERSION${DELIM}
-hostname${DELIM}$hostname${DELIM}
-instance name${DELIM}$instname${DELIM}
-database log mode${DELIM}$logmode${DELIM}
-instance startup at${DELIM}$WORKFILE_TIMESTAMP${DELIM}";
+  # -----
+  # Save values of this run to workfile.
+  my @WF = (
+    "database status${DELIM}$db_status${DELIM}",
+    "oracle version${DELIM}$ORACLE_VERSION${DELIM}",
+    "hostname${DELIM}$hostname${DELIM}",
+    "instance name${DELIM}$instname${DELIM}",
+    "database log mode${DELIM}$logmode${DELIM}",
+    "instance startup at${DELIM}$instance_startup_at${DELIM}"
+  );
 
   print "\n";
   print "General info for next run:\n";
-  print "$wf\n";
+  print join("\n", @WF), "\n";
   print "-----\n";
-  write2file($TMPOUT1, "$wf\n");
+  write2file($TMPOUT1, join("\n", @WF) . "\n");
 
-  # Build the value file with the currently calculated position.
+  # Build the value file with the current values.
   make_value_file($TMPOUT1, $workfile, $WORKFILE_TIMESTAMP, $DELIM, 1);
 
+  # -----
   send_doc($ts);
 
   return(1); # ok
@@ -1935,9 +2066,10 @@ sub sga {
   #  select 'free memory', current_size from v\$sga_dynamic_free_memory;
   #";
 
+  # select 'free memory', current_size from v\$sga_dynamic_free_memory;
+
   my $sql = "
     select 'overall size', sum(value) from v\$sga;
-    select 'free memory', current_size from v\$sga_dynamic_free_memory;
   ";
 
   if (! do_sql($sql)) {return(0)}
@@ -1956,13 +2088,13 @@ sub sga {
    , elapsed   => $DEFAULT_ELAPSED
   });
 
-  uls_value_nodup({
-     teststep  => $ts
-   , detail    => "free memory"
-   , value     => $free
-   , unit      => "MB"
-   , elapsed   => $DEFAULT_ELAPSED
-  });
+  # uls_value_nodup({
+  #    teststep  => $ts
+  #  , detail    => "free memory"
+  #  , value     => $free
+  #  , unit      => "MB"
+  #  , elapsed   => $DEFAULT_ELAPSED
+  # });
 
   send_doc($ts);
 
@@ -2915,7 +3047,7 @@ sub session_cached_cursors {
 
   uls_value($ts, "avg", pround($avg, -1), "#");
 
-  send_doc("session cached cursors", $ts);
+  send_doc("Session Cached Cursors", $ts);
 
   return(1);
 
@@ -3108,6 +3240,7 @@ sub scheduler_details {
 sub jobs {
 
   # "jobs" are nearly obsolete, since one would use the "scheduler" now.
+  # DBMS_JOB ist still supported for backward compatability at least in Oracle 12.1.
 
   title(sub_name());
 
@@ -3223,9 +3356,10 @@ sub jobs {
 
         }
 
-        # This is always sent to ULS, you may want to set an isAlive on it.
-        my $last_exec_before = time - iso_datetime2secs($last_exec);
-        uls_value($tstep, "last execution before", pround($last_exec_before / 3600, -2), "h");
+        # # This is always sent to ULS, you may want to set an isAlive on it.
+        # my $last_exec_before = time - iso_datetime2secs($last_exec);
+        # uls_value($tstep, "last execution before", pround($last_exec_before / 3600, -2), "h");
+        # Useless data! IsAlive can e.g. be set on 'what'.
 
         send_doc($ts, $tstep);
       }
@@ -3731,6 +3865,127 @@ sub undo_usage {
 } # undo_usage
 
 
+# -------------------------------------------------------------------
+sub schema_information {
+  # schema_information()
+
+  title(sub_name());
+
+  my $tstep = "schema information";
+
+  # in MB
+  my $sql = "";
+
+  if ($ORACLE_MAJOR_VERSION >= 12) {
+    # 12.1 and later
+    $sql = "
+      select  owner, round(sum(bytes)/1024/1024, 0)
+      from dba_segments
+      where owner in (select username from dba_users where ORACLE_MAINTAINED = 'N'
+      group by owner;
+    ";
+  } else {
+    # up to 11.2
+    $sql = "
+      select  owner, round(sum(bytes)/1024/1024, 0)
+      from dba_segments
+      where owner in (select username from dba_users where created > (select min(created) + 1/24 from dba_users))
+      group by owner;
+    ";
+  }
+
+  if (! do_sql($sql)) {return(0)}
+
+  my @R;
+  get_value_lines(\@R, $TMPOUT1);
+
+  foreach my $r (@R) {
+    my @E = split($DELIM, $r);
+    @E = map(trim($_), @E);
+
+    my ($owner, $mb) = @E;
+
+    uls_value("$tstep:$owner", "allocated space", $mb, "MB");
+    send_doc($tstep, "$tstep:$owner");
+  }
+
+
+  # More:
+  #   number of objects
+  #   time until password expires
+  #   ...
+
+} # schema_information
+
+
+
+# -------------------------------------------------------------------
+sub privileges {
+  # privileges()
+  #
+  # THIS IS WORK IN PROGRESS
+  # Do not use until finished.
+
+  title(sub_name());
+
+  # ??????
+  my $tstep = "administrative database user";
+  # ignoring the oracle maintained users
+
+  my $sql = "";
+
+  # Re-write as prepared statements!
+  #
+  # count(*)
+  # select * from (
+  #   select * from dba_role_privs where GRANTED_ROLE = 'DBA' and COMMON != 'YES'
+  #   union
+  #   select * from sys.dba_role_privs where ADMIN_OPTION = 'YES' and COMMON != 'YES'
+  # )
+  # where 1 = 1
+  # and GRANTEE != 'DBA'
+  # and GRANTEE != 'SYS';
+  # 
+  # 
+  # UNLIMITED TABLESPACE
+  # DBA
+  # RESOURCE
+  # 
+  # SYSDBA
+  # Ab Oracle 12.1:
+  # select pw.USERNAME, SYSDBA, SYSOPER, SYSASM, SYSBACKUP, SYSDG, SYSKM from v$pwfile_users pw
+  #   inner join dba_users du on pw.username = du.username
+  # where du.oracle_maintained != 'Y';
+  # 
+  # Oracle 11.2:
+  # select USERNAME, SYSDBA, SYSOPER, SYSASM from v$pwfile_users; 
+  # 
+
+  if ($ORACLE_MAJOR_VERSION >= 12) {
+  } else {
+  }
+
+  if (! do_sql($sql)) {return(0)}
+
+  my @R;
+  get_value_lines(\@R, $TMPOUT1);
+
+  foreach my $r (@R) {
+    my @E = split($DELIM, $r);
+    @E = map(trim($_), @E);
+
+    my ($owner, $c) = @E;
+
+    uls_value("$tstep", "sysdba users", $c, "#");
+  }
+
+  send_doc($tstep);
+
+} # privileges
+
+
+
+
 
 # -------------------------------------------------------------------
 sub tnsping {
@@ -4000,12 +4255,12 @@ print "FAILED_LOGIN_REPORT=$FAILED_LOGIN_REPORT\n";
 
 print "DELIM=$DELIM\n";
 
+# For actions once a day
+$ONCE_A_DAY = scheduled("${WORKFILEPREFIX}.nineoclock", "05:00");
+
 # ----- documentation -----
 # Does the documentation needs to be resent to ULS?
 title("Documentation");
-
-# For actions once a day
-$ONCE_A_DAY = scheduled("${WORKFILEPREFIX}.nineoclock", "05:00");
 
 if ($ONCE_A_DAY) {
   # -----
@@ -4023,7 +4278,6 @@ if ($ONCE_A_DAY) {
   # de-reference the return value to the complete hash.
   %TESTSTEP_DOC = %{doc2hash(\*DATA)};
 
-  # uls_value($IDENTIFIER, "documentation", "transferring", "[ ]");
 }
 
 # ----- sqlplus command -----
@@ -4155,6 +4409,13 @@ flashback();
 
 audit_information();
 
+# ----- schema information -----
+if ($ONCE_A_DAY) {
+  if ($OPTIONS =~ /SCHEMA_INFO,/) {
+    schema_information();
+  }
+}
+
 # ----- tnsping -----
 # Check the listener
 # It is NOT a complete connection
@@ -4227,7 +4488,7 @@ an overview of e.g.:
   the dictionary and library caches,
   sessions, processes and database system activity.
 
-This script is run by a calling script, typically 'watch_oracle', that sets the correct environment before starting the Perl script watch_oracle.pl.  The 'watch_oracle' in turn is called by the cron daemon on Un*x or through a scheduled task on Wind*ws. The script generates log files and several work files to keep data for the next run(s). The directory defined by WORKING_DIR in the oracle_tools.conf configuration file is used as the destination for those.
+This script is run by a calling script, typically 'oracle_instance.sh', that sets the correct environment before starting the Perl script watch_oracle.pl. The '' in turn is called by the cron daemon on Un*x or through a scheduled task on Wind*ws. The script generates log files and several work files to keep data for the next run(s). The directory defined by WORKING_DIR in the oracle_tools.conf configuration file is used as the destination for those.
 
 You may place the scripts in whatever directory you like.
 
@@ -4260,7 +4521,7 @@ runtime:
 # 
 
 
-Copyright 2004-2016, roveda
+Copyright 2004-2017, roveda
 
 The 'ULS Client for Oracle' is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -4432,15 +4693,16 @@ average wait:
 #########################
 *SGA
 ===
-Because the purpose of the SGA is to store data in memory for fast access, the SGA should be within main memory. If pages of the SGA are swapped to disk, then the data is no longer quickly accessible. On most operating systems, the disadvantage of paging significantly outweighs the advantage of a large SGA.
+Because the purpose of the SGA is to store data in memory for fast access, the SGA should be large but within main memory. If pages of the SGA are swapped to disk, then the data is no longer quickly accessible. On most operating systems, the disadvantage of paging significantly outweighs the advantage of a large SGA.
 
 overall size:
+  The current size of the complete SGA.
   select sum(value) from v$sga;
 
-free memory:
-  select current_size from v$sga_dynamic_free_memory;
-
-You may change buffer cache, shared pool and large pool without bouncing the instance, as long as there is free memory available.
+# free memory:
+#   select current_size from v$sga_dynamic_free_memory;
+# 
+# You may change buffer cache, shared pool and large pool without bouncing the instance, as long as there is free memory available.
 
 #########################
 # This is left over only for Oracle 9
@@ -5103,6 +5365,16 @@ Oracle Scheduler is a feature of Oracle database. It enables users to schedule j
 
 scheduler log:
   Lists the log entries of the scheduled jobs.
+
+###########################
+*Schema Information
+==================
+
+Some metrics gathered about all schemata that are not created at database installation. So normally, the system schemata should not appear.
+
+allocated space:
+  The allocated space (tables, indexes, ...) of the schema as found in dba_segments.
+
 
 ###########################
 *Flashback
