@@ -1,38 +1,38 @@
 #!/usr/bin/perl
 #
-# test_before_run.pl - Test, if any 'ULS Client for Oracle' script is to be run or not
+# test_before_run.pl - Test, if any Oracle OpTools script is to be run or not
 #
 # ---------------------------------------------------------
-# Copyright 2013, roveda
+# Copyright 2013 - 2017, roveda
 #
-# This file is part of 'ULS Client for Oracle'.
+# This file is part of the 'Oracle OpTools'.
 #
-# The 'ULS Client for Oracle' is free software: you can redistribute it and/or modify
+# The 'Oracle OpTools' is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
 # (at your option) any later version.
 #
-# The 'ULS Client for Oracle' is distributed in the hope that it will be useful,
+# The 'Oracle OpTools' is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with the 'ULS Client for Oracle'.  If not, see <http://www.gnu.org/licenses/>.
+# along with the 'Oracle OpTools'. If not, see <http://www.gnu.org/licenses/>.
 #
 #
 # ---------------------------------------------------------
 # Synopsis:
-#   perl test_before_run.pl <configuration file>
+#   perl test_before_run.pl <configuration_file>
 #
 # ---------------------------------------------------------
 # Description:
-#   This script reads the <configuration file> and gets the 
+#   This script reads the <configuration_file> and gets the 
 #   command defined in TEST_BEFORE_RUN. The script executes the 
 #   command on system level and returns 0 if it was successful 
 #   or it returns 1 if it was not successful.
 #
-#   It can be used to find out if any script of the 'ULS Client for Oracle'
+#   It can be used to find out if any script of the Oracle OpTools
 #   shall be executed or not. The test may e.g. be a test if a 
 #   specific directory is mounted or a process is running.
 #
@@ -41,14 +41,12 @@
 #
 # ---------------------------------------------------------
 # Options:
-#   See the configuration file.
 #
 # ---------------------------------------------------------
 # Restrictions:
 #
 # ---------------------------------------------------------
 # Dependencies:
-#   Misc.pm
 #
 # ---------------------------------------------------------
 # Disclaimer:
@@ -61,22 +59,25 @@
 #
 # date            name        version
 # ----------      ----------  -------
-#
 # 2013-08-18      roveda      0.01
-#   Creation.
+#    Creation.
 #
 # 2013-08-24      roveda      0.02
-#   Support no command as no tests necessary, exit(0)
+#    Support no command as no tests necessary, exit(0)
 #
 # 2016-03-18      roveda      0.03
-#   Added support for oracle_tools_SID.conf
-#   (This is a preparation for fully automatic updates of the oracle_tools)
+#    Added support for oracle_tools_SID.conf
+#    (This is a preparation for fully automatic updates of the oracle_tools)
 #
-# 2016-03-18      roveda      0.04
-#   Changed the non-default configuration filename to <sid>.conf
+# 2017-01-24      roveda      0.04
+#    Changed copyright text.
+#
+# 2017-03-21      roveda      0.05
+#   Fixed the broken support of sid specific configuration file.
+#   Updated the version reference for Misc.pm.
 #
 #
-#   Change also $VERSION later in this script!
+#    Change also $VERSION later in this script!
 #
 # ===================================================================
 
@@ -89,7 +90,7 @@ use File::Basename;
 use lib ".";
 use Misc 0.40;
 
-my $VERSION = 0.04;
+my $VERSION = 0.05;
 
 # ===================================================================
 # The "global" variables

@@ -1,0 +1,13 @@
+CHANGES
+
+This file keeps the changes to the ULS Client for Oracle Databases package.
+There is only a short information about the changes, 
+but it will point to the changed scripts.
+There are change annotations in the CHANGES file of the Oracle OpTools 
+for watch_oracle.pl which have not been relocated to this file.
+
+# -----
+2017-03-21, roveda
+  Refreshed the test_before_run.pl to the latest version from the 
+  Oracle OpTools.
+
