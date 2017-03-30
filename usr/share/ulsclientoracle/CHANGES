@@ -7,6 +7,9 @@ There are change annotations in the CHANGES file of the Oracle OpTools
 for watch_oracle.pl which have not been relocated to this file.
 
 # -----
+2017-03-30, roveda
+  Improved the descriptive text in standard.conf
+
 2017-03-21, roveda
   Refreshed the test_before_run.pl to the latest version from the 
   Oracle OpTools.

@@ -1,4 +1,4 @@
 # ULS Client for Oracle Databases
-This is the ULS client for monitoring Oracle databases, gathering many performance values, its current state and any errors from the alert.log.
 
-See www.universal-logging-system.org for more information about ULS.
+The ULS Client for Oracle databases is the GPLv3-based agent for gathering runtime metrics and status information and logging configuration settings on Oracle database instances running on Unix-like operating systems. All gathered data is sent to an ULS server. It works for the 9i, 10g, 11g and 12c versions of the Oracle RDBMS. See www.universal-logging-system.org for more information.
+
