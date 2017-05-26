@@ -391,6 +391,9 @@
 #   the workfile if the sql commands could not be executed or the database 
 #   is not available.
 #
+# 2017-05-26      roveda      0.75
+#   Added admin_db_user(), which generates a list of non-oracle user with adminstrative privileges.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -408,7 +411,7 @@ use lib ".";
 use Misc 0.40;
 use Uls2 1.15;
 
-my $VERSION = 0.74;
+my $VERSION = 0.75;
 
 # ===================================================================
 # The "global" variables
@@ -423,6 +426,7 @@ my $WORKFILEPREFIX;
 my $TMPOUT1;
 my $LOCKFILE;
 my $FAILED_LOGIN_REPORT;
+my $ADMIN_DBUSER_REPORT;
 
 my $DELIM = "!";
 
@@ -3879,9 +3883,12 @@ sub schema_information {
   if ($ORACLE_MAJOR_VERSION >= 12) {
     # 12.1 and later
     $sql = "
+      variable om varchar(1)
+      exec :om := 'N'
+
       select  owner, round(sum(bytes)/1024/1024, 0)
       from dba_segments
-      where owner in (select username from dba_users where ORACLE_MAINTAINED = 'N'
+      where owner in (select username from dba_users where ORACLE_MAINTAINED = :om
       group by owner;
     ";
   } else {
@@ -3920,23 +3927,16 @@ sub schema_information {
 
 
 # -------------------------------------------------------------------
-sub privileges {
-  # privileges()
-  #
-  # THIS IS WORK IN PROGRESS
-  # Do not use until finished.
+sub admin_db_user {
+  # admin_db_user()
 
   title(sub_name());
 
-  # ??????
   my $tstep = "administrative database user";
   # ignoring the oracle maintained users
 
   my $sql = "";
 
-  # Re-write as prepared statements!
-  #
-  # count(*)
   # select * from (
   #   select * from dba_role_privs where GRANTED_ROLE = 'DBA' and COMMON != 'YES'
   #   union
@@ -3961,27 +3961,62 @@ sub privileges {
   # select USERNAME, SYSDBA, SYSOPER, SYSASM from v$pwfile_users; 
   # 
 
-  if ($ORACLE_MAJOR_VERSION >= 12) {
-  } else {
-  }
+  if ($ORACLE_MAJOR_VERSION < 12) { return(0) }
+  # only checked for Oracle 12.1 and later
+
+  $sql = "
+    variable gr VARCHAR2(10)
+    exec :gr := 'DBA'
+
+    variable yes VARCHAR2(10)
+    exec :yes := 'YES'
+
+    variable g1 VARCHAR2(10)
+    exec :g1 := 'DBA'
+
+    variable g2 VARCHAR2(10)
+    exec :g2 := 'SYS'
+
+    select GRANTEE, GRANTED_ROLE, ADMIN_OPTION, DELEGATE_OPTION, DEFAULT_ROLE from (
+     select * from dba_role_privs where GRANTED_ROLE = :gr and COMMON != :yes
+     union
+     select * from sys.dba_role_privs where ADMIN_OPTION = :yes and COMMON != :yes
+    )
+    where GRANTEE != :g1 and GRANTEE != :g2
+    ;
+  ";
+
 
   if (! do_sql($sql)) {return(0)}
 
   my @R;
-  get_value_lines(\@R, $TMPOUT1);
 
-  foreach my $r (@R) {
-    my @E = split($DELIM, $r);
-    @E = map(trim($_), @E);
+  uls_value($tstep, "administrative database user", $#R, '#');
 
-    my ($owner, $c) = @E;
+  if (get_value_lines(\@R, $TMPOUT1)) {
+    unshift(@R, "GRANTEE $DELIM GRANTED ROLE $DELIM ADMIN OPTION $DELIM DELEGATE OPTION $DELIM DEFAULT ROLE");
 
-    uls_value("$tstep", "sysdba users", $c, "#");
+    my $txt = make_text_report(\@R, $DELIM, "LLLLL", 1);
+
+    # The resulting text report may be too long for a simple text value.
+    #
+    # uls_value($ts, "administrative database user report", $txt, "_");
+    #
+    # So use a file instead:
+
+    if (write2file($ADMIN_DBUSER_REPORT, $txt) ) {
+      uls_file({
+        teststep => $tstep
+       ,detail   => "administrative database user report"
+       ,filename => $ADMIN_DBUSER_REPORT
+       ,rename_to => "administrative_database_user_report.txt"
+      });
+    }
   }
 
   send_doc($tstep);
 
-} # privileges
+} # admin_db_user
 
 
 
@@ -4253,6 +4288,9 @@ print "TMPOUT1=$TMPOUT1\n";
 $FAILED_LOGIN_REPORT = "${WORKFILEPREFIX}.failed_login_report";
 print "FAILED_LOGIN_REPORT=$FAILED_LOGIN_REPORT\n";
 
+$ADMIN_DBUSER_REPORT = "${WORKFILEPREFIX}.administrative_database_user_report";
+print "ADMIN_DBUSER_REPORT=$ADMIN_DBUSER_REPORT\n";
+
 print "DELIM=$DELIM\n";
 
 # For actions once a day
@@ -4300,6 +4338,11 @@ if (! general_info()) {
   uls_flush(\%ULS);
 
   exit(1);
+}
+
+# ----- administrative database users -----
+if ($ONCE_A_DAY) {
+  admin_db_user();
 }
 
 # ----- tablespace usage -----
@@ -5477,4 +5520,21 @@ failed login report:
     That might not be in compliance with your privacy commitment!
     You may disable this report in the configuration file.
     Search for: OPTIONS
+
+##########################
+*Administrative Database User
+============================
+This is the list of users with DBA privileges and who are not Oracle maintained.
+For security reasons, there should be NONE of them.
+
+The list is retrieved with the SQL command:
+
+select GRANTEE, GRANTED_ROLE, ADMIN_OPTION, DELEGATE_OPTION, DEFAULT_ROLE 
+  from (
+    select * from dba_role_privs where GRANTED_ROLE = 'DBA' and COMMON != 'YES'
+    union
+    select * from sys.dba_role_privs where ADMIN_OPTION = 'YES' and COMMON != 'YES'
+  )
+where GRANTEE != 'DBA' and GRANTEE != 'SYS';
+
 

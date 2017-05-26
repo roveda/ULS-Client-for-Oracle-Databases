@@ -7,6 +7,10 @@ There are change annotations in the CHANGES file of the Oracle OpTools
 for watch_oracle.pl which have not been relocated to this file.
 
 # -----
+2017-05-26, roveda
+  Added a list of non-oracle database user with administrative privileges
+  to watch_oracle.pl
+
 2017-03-30, roveda
   Improved the descriptive text in standard.conf
 
