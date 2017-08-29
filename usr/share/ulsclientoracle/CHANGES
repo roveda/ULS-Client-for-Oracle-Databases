@@ -7,6 +7,15 @@ There are change annotations in the CHANGES file of the Oracle OpTools
 for watch_oracle.pl which have not been relocated to this file.
 
 # -----
+2017-08-29, roveda
+  Added 'potential max size' to tablespaces.
+
+2017-08-15, roveda
+  Debugged the list of non-oracle database user with administrative privileges.
+
+2017-05-31, roveda
+  Added uls_settings.pl and a matching bash script.
+
 2017-05-26, roveda
   Added a list of non-oracle database user with administrative privileges
   to watch_oracle.pl

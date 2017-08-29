@@ -3,7 +3,7 @@
 # watch_oracle.pl - monitor a running Oracle database instance
 #
 # ---------------------------------------------------------
-# Copyright 2004-2016, roveda
+# Copyright 2004-2017, roveda
 #
 # This file is part of the 'ULS Client for Oracle'.
 # 
@@ -394,6 +394,13 @@
 # 2017-05-26      roveda      0.75
 #   Added admin_db_user(), which generates a list of non-oracle user with adminstrative privileges.
 #
+# 2017-06-21      roveda      0.76
+#   Handling of lowercase tablespace names corrected.
+#
+# 2017-08-15      roveda      0.77
+#   Debugged the sql for the list of non-oracle user with adminstrative privileges.
+#   Added 'potential max size' to tablespace information. That is the maximum size
+#   a tablespace can grow to, depending on the settings of its data (or temp) files.
 #
 #   Change also $VERSION later in this script!
 #
@@ -411,7 +418,7 @@ use lib ".";
 use Misc 0.40;
 use Uls2 1.15;
 
-my $VERSION = 0.75;
+my $VERSION = 0.77;
 
 # ===================================================================
 # The "global" variables
@@ -1011,9 +1018,11 @@ sub tablespace_usage {
 
     my @E = split($DELIM, $t);
     @E = map(trim($_), @E);
-    @E = map(uc($_), @E);
+    # Do not use upper case, tablespace names may be in lowercase.
+    # @E = map(uc($_), @E);
 
     my ($ts_name, $contents) = @E;
+    $contents = uc($contents);
     print "Usage for $contents tablespace: $ts_name\n";
 
     # Is the tablespace contents supported?
@@ -1032,9 +1041,23 @@ sub tablespace_usage {
 
         select 'lazy', nvl(sum(BYTES_FREE), 0), nvl(sum(BYTES_USED), 0) from V\$TEMP_SPACE_HEADER where tablespace_name = :ts;
         select 'current', nvl(sum(bytes_used), 0) from v\$temp_extent_pool where tablespace_name = :ts;
+
+        select 'max_auto_extensible', nvl(sum( greatest(maxbytes, bytes)), 0)
+          from dba_temp_files
+          where tablespace_name = :ts and autoextensible = 'YES';
+
+        select 'max_non_extensible', nvl(sum( greatest(maxbytes, bytes)), 0)
+          from dba_temp_files
+          where tablespace_name = :ts and autoextensible = 'NO';
+
       ";
 
       if (! do_sql($sql)) {return(0)}
+
+      # Max potential size that the temp files can grow to
+      my $potential_max_size = trim(get_value($TMPOUT1, $DELIM, "max_auto_extensible"));
+      $potential_max_size   += trim(get_value($TMPOUT1, $DELIM, "max_non_extensible"));
+      uls_value("$tstep:$ts_name", "potential max size", bytes2gb($potential_max_size), "GB");
 
       # The space within the temporary tablespaces is only lazily
       # reused (stays occupied until needed for operation). The better
@@ -1090,9 +1113,23 @@ sub tablespace_usage {
 
         select 'size', nvl(sum(bytes), 0) from dba_data_files where tablespace_name = :ts;
         select 'free', nvl(sum(bytes), -1) from dba_free_space where tablespace_name = :ts;
+
+        select 'max_auto_extensible', nvl(sum( greatest(maxbytes, bytes)), 0)
+          from dba_data_files
+          where tablespace_name = :ts and autoextensible = 'YES';
+
+        select 'max_non_extensible', nvl(sum( greatest(maxbytes, bytes)), 0)
+          from dba_data_files
+          where tablespace_name = :ts and autoextensible = 'NO';
+
       ";
 
       if (! do_sql($sql)) {return(0)}
+
+      # Max potential size that the data files can grow to
+      my $potential_max_size = trim(get_value($TMPOUT1, $DELIM, "max_auto_extensible"));
+      $potential_max_size   += trim(get_value($TMPOUT1, $DELIM, "max_non_extensible"));
+      uls_value("$tstep:$ts_name", "potential max size", bytes2gb($potential_max_size), "GB");
 
       my $size = trim(get_value($TMPOUT1, $DELIM, "size"));
 
@@ -3883,21 +3920,29 @@ sub schema_information {
   if ($ORACLE_MAJOR_VERSION >= 12) {
     # 12.1 and later
     $sql = "
-      variable om varchar(1)
+      variable om char(1)
       exec :om := 'N'
 
-      select  owner, round(sum(bytes)/1024/1024, 0)
-      from dba_segments
-      where owner in (select username from dba_users where ORACLE_MAINTAINED = :om
-      group by owner;
+      select  username, round(nvl( sum(bytes)  , 0)/1024/1024, 0)
+      from dba_segments, dba_users
+      where ORACLE_MAINTAINED = :om
+        and username = owner (+)
+      group by username;
     ";
   } else {
     # up to 11.2
     $sql = "
-      select  owner, round(sum(bytes)/1024/1024, 0)
-      from dba_segments
-      where owner in (select username from dba_users where created > (select min(created) + 1/24 from dba_users))
-      group by owner;
+      variable t0off number
+      exec :t0off := 2/24
+
+      select  username, round(nvl( sum(bytes)  , 0)/1024/1024, 0)
+      from dba_segments, dba_users 
+      where username not in (select SCHEMA_NAME from v\$sysaux_occupants)
+        and username not in (select schema from dba_registry)
+        and username not in (select username from dba_users where created < (select min(created) + :t0off from dba_users))
+        and username = owner (+)
+      group by username;
+
     ";
   }
 
@@ -3991,9 +4036,11 @@ sub admin_db_user {
 
   my @R;
 
-  uls_value($tstep, "administrative database user", $#R, '#');
-
   if (get_value_lines(\@R, $TMPOUT1)) {
+
+    uls_value($tstep, "administrative database user", $#R + 1, '#');
+    # Remember: $#R returns the max index of the array, which starts at zero!
+
     unshift(@R, "GRANTEE $DELIM GRANTED ROLE $DELIM ADMIN OPTION $DELIM DELEGATE OPTION $DELIM DEFAULT ROLE");
 
     my $txt = make_text_report(\@R, $DELIM, "LLLLL", 1);
@@ -4012,13 +4059,13 @@ sub admin_db_user {
        ,rename_to => "administrative_database_user_report.txt"
       });
     }
+  } else {
+    uls_value($tstep, "administrative database user", 0, '#');
   }
 
   send_doc($tstep);
 
 } # admin_db_user
-
-
 
 
 
@@ -5265,6 +5312,13 @@ successful:
 ================
 
 Information about the tablespaces.
+
+potential max size:
+  The maximum size that the tablespace can grow to, depending 
+  on the settings of the data (or temp) files, whether 
+  AUTOEXTEND is ON or OFF and to what value maxsize is set.
+  There is no need to increase the data files until this value 
+  has not been reached.
 
 size:
   Size of the tablespace.
