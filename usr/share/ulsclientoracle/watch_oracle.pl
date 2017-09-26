@@ -402,6 +402,14 @@
 #   Added 'potential max size' to tablespace information. That is the maximum size
 #   a tablespace can grow to, depending on the settings of its data (or temp) files.
 #
+# 2017-09-25      roveda      0.78
+#   Added $ORACLE_VERSION_3D for exact version comparisons.
+#   Column DELEGATE_OPTION does not exist in Oracle versions lower than 12.1.0.2, 
+#   COMMON not in versions lower than 12.1.0.1. So ijust skip admin_db_user() for all 
+#   Oracle versions lower than 12.1.0.2.
+#
+#
+#
 #   Change also $VERSION later in this script!
 #
 # ===================================================================
@@ -418,7 +426,7 @@ use lib ".";
 use Misc 0.40;
 use Uls2 1.15;
 
-my $VERSION = 0.77;
+my $VERSION = 0.78;
 
 # ===================================================================
 # The "global" variables
@@ -497,6 +505,7 @@ my $IDENTIFIER;
 
 # Keeps the version of the oracle software
 my $ORACLE_VERSION = "";
+my $ORACLE_VERSION_3D = "";
 my $ORACLE_MAJOR_VERSION = "";
 my $ORACLE_MINOR_VERSION = "";
 
@@ -935,9 +944,14 @@ sub general_info {
 
   $ORACLE_VERSION     = trim(get_value($TMPOUT1, $DELIM, "oracle version"));
   # e.g. 10.1.0.3.0, 10.2.0.3.0, 11.2.0.4.0, 12.1.0.2.0
+
   ($ORACLE_MAJOR_VERSION, $ORACLE_MINOR_VERSION, my $dummy) = split(/\./, $ORACLE_VERSION, 3);
   $ORACLE_MAJOR_VERSION = int($ORACLE_MAJOR_VERSION);
   $ORACLE_MINOR_VERSION = int($ORACLE_MINOR_VERSION);
+
+  $ORACLE_VERSION_3D = join(".", map(sprintf("%03d", $_), split(/\./, $ORACLE_VERSION) ) );
+  # e.g. 010.001.000.003.000, 010.002.000.003.000, 011.002.000.004.000, 012.001.000.002.000
+  # That allows exact comparisons of Oracle versions.
 
   $hostname            = trim(get_value($TMPOUT1, $DELIM, "hostname"));
   $instname            = trim(get_value($TMPOUT1, $DELIM, "instance name"));
@@ -4006,8 +4020,9 @@ sub admin_db_user {
   # select USERNAME, SYSDBA, SYSOPER, SYSASM from v$pwfile_users; 
   # 
 
-  if ($ORACLE_MAJOR_VERSION < 12) { return(0) }
-  # only checked for Oracle 12.1 and later
+  if ($ORACLE_VERSION_3D lt "012.001.000.002" ) { return(0) }
+  # Column DELEGATE_OPTION does not exist in versions before 12.1.0.2
+  # COMMON does not exist in versions before 12.1.0.1
 
   $sql = "
     variable gr VARCHAR2(10)
@@ -4023,9 +4038,9 @@ sub admin_db_user {
     exec :g2 := 'SYS'
 
     select GRANTEE, GRANTED_ROLE, ADMIN_OPTION, DELEGATE_OPTION, DEFAULT_ROLE from (
-     select * from dba_role_privs where GRANTED_ROLE = :gr and COMMON != :yes
+     select * from dba_role_privs where GRANTED_ROLE = :gr  and COMMON != :yes
      union
-     select * from sys.dba_role_privs where ADMIN_OPTION = :yes and COMMON != :yes
+     select * from dba_role_privs where ADMIN_OPTION = :yes and COMMON != :yes
     )
     where GRANTEE != :g1 and GRANTEE != :g2
     ;
