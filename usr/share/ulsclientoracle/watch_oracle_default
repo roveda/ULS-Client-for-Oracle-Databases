@@ -1,0 +1,119 @@
+#!/bin/bash
+#
+# watch_oracle_default
+#
+# ---------------------------------------------------------
+# Copyright 2018, roveda
+#
+# This file is part of the 'ULS Client for Oracle'.
+#
+# The 'ULS Client for Oracle' is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# The 'ULS Client for Oracle' is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with the 'ULS Client for Oracle'.  If not, see <http://www.gnu.org/licenses/>.
+#
+#
+# ---------------------------------------------------------
+# Synopsis:
+#   watch_oracle_default
+#
+# ---------------------------------------------------------
+# Description:
+#   This script starts the watch_oracle.pl by invoking perl.
+#   It uses the current Oracle environment settings and the 
+#   default configuration file.
+#
+#   Send any hints, feature requests or bug reports to:
+#     roveda at universal-logging-system.org
+#
+# ---------------------------------------------------------
+# Options:
+#
+# ---------------------------------------------------------
+# Dependencies:
+#
+# ---------------------------------------------------------
+# Restrictions:
+#
+# ---------------------------------------------------------
+# Disclaimer:
+#   The script has been tested and appears to work as intended,
+#   but there is no guarantee that it behaves as YOU expect.
+#   You should always run new scripts in a test environment initially.
+#
+# ---------------------------------------------------------
+# Versions:
+#
+# date            name        version
+# ----------      ----------  -------
+#
+# 2018-01-25      roveda      0.01
+#   Created
+#
+#
+#
+# ===================================================================
+
+
+USAGE="watch_oracle_default"
+
+unset LC_ALL
+export LANG=C
+
+cd `dirname $0`
+
+# -----
+# Check environment
+
+if [[ -z "$ORACLE_SID" || -z "$ORACLE_HOME" ]] ; then
+  echo "Error: the Oracle environment is not set up correctly => aborting script"
+  exit 2
+fi
+
+# -----
+# Check for configuration file
+
+CONFG="/etc/uls/oracle/standard.conf"
+
+if [[ ! -f "$CONFG" ]] ; then
+  echo
+  echo "Error: standard configuration file '$CONFG' not found => aborting script"
+  exit 2
+fi
+
+
+# -----
+# HOSTNAME is used, but normally not set in cronjobs
+
+HOSTNAME=`uname -n`
+export HOSTNAME
+
+# Remember to include the directory where flush_test_values can
+# be found (/usr/bin, /usr/local/bin) in the PATH.
+
+
+# -----
+# Exit silently, if the TEST_BEFORE_RUN command does
+# not return the exit value 0.
+
+perl test_before_run.pl "$CONFG" > /dev/null 2>&1 || exit
+
+# -----
+# Call the script.
+
+# Set for decimal point, english messages and ISO date representation
+# (for this client only).
+# export NLS_LANG=AMERICAN_AMERICA.WE8ISO8859P1
+export NLS_LANG=AMERICAN_AMERICA.UTF8
+export NLS_DATE_FORMAT="YYYY-MM-DD hh24:mi:ss"
+
+perl watch_oracle.pl "$CONFG"
+

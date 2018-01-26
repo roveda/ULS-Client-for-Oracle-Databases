@@ -7,6 +7,21 @@ There are change annotations in the CHANGES file of the Oracle OpTools
 for watch_oracle.pl which have not been relocated to this file.
 
 # -----
+2018-01-26, roveda
+  Added 'parse count (hard)', 'transaction rollbacks' and 'user rollbacks' to system statistics.
+  Updated the versions of the used perl modules.
+  %used for tablespaces is renamed to %used_pms (of potential max size).
+  A correct error message is given if the alert.log could not be found (and not '-not found-').
+
+2018-01-19, roveda
+  Changed watch_oracle.pl
+
+2017-12-20, roveda
+  Changed meaning of %used in tablespace usage, it is now calculated in
+  relation to 'potential max size' (maximum possible size of all data files 
+  as configured). Detail 'free' omitted, it is now calculated on demand in
+  the ULS user interface.
+
 2017-08-29, roveda
   Added 'potential max size' to tablespaces.
 

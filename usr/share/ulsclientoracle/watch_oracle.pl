@@ -3,7 +3,7 @@
 # watch_oracle.pl - monitor a running Oracle database instance
 #
 # ---------------------------------------------------------
-# Copyright 2004-2017, roveda
+# Copyright 2004-2018, roveda
 #
 # This file is part of the 'ULS Client for Oracle'.
 # 
@@ -405,9 +405,19 @@
 # 2017-09-25      roveda      0.78
 #   Added $ORACLE_VERSION_3D for exact version comparisons.
 #   Column DELEGATE_OPTION does not exist in Oracle versions lower than 12.1.0.2, 
-#   COMMON not in versions lower than 12.1.0.1. So ijust skip admin_db_user() for all 
-#   Oracle versions lower than 12.1.0.2.
+#   COMMON not in versions lower than 12.1.0.1. So skip admin_db_user() is skipped for 
+#   all Oracle versions lower than 12.1.0.2.
 #
+# 2017-12-20      roveda      0.79
+#   Changed the meaning of details in tablespace usage. 
+#   %used is now calculated in relation to potential max size.
+#
+# 2018-01-19      roveda      0.80
+#   Added 'parse count (hard)', 'transaction rollbacks' and 'user rollbacks' to system statistics.
+#   Updated the versions of the used perl modules.
+#   %used for tablespaces is renamed to %used_pms (of potential max size).
+#   A correct error message is given if the alert.log could not be found
+#   (and not '-not found-').
 #
 #
 #   Change also $VERSION later in this script!
@@ -423,10 +433,10 @@ use File::Copy;
 
 # These are my modules:
 use lib ".";
-use Misc 0.40;
-use Uls2 1.15;
+use Misc 0.41;
+use Uls2 1.16;
 
-my $VERSION = 0.78;
+my $VERSION = 0.80;
 
 # ===================================================================
 # The "global" variables
@@ -1091,22 +1101,30 @@ sub tablespace_usage {
       # uls_value("$tstep:$ts_name", "size",        pround($size / $MB, -1),      "MB");
       # uls_value("$tstep:$ts_name", "used (lazy)", pround($used_lazy / $MB, -1), "MB");
       # uls_value("$tstep:$ts_name", "free (lazy)", pround($free_lazy / $MB, -1), "MB");
-      uls_value("$tstep:$ts_name", "size",        bytes2gb($size),      "GB");
-      uls_value("$tstep:$ts_name", "used (lazy)", bytes2gb($used_lazy), "GB");
-      uls_value("$tstep:$ts_name", "free (lazy)", bytes2gb($free_lazy), "GB");
+      # uls_value("$tstep:$ts_name", "size",        bytes2gb($size),      "GB");
+      uls_value("$tstep:$ts_name", "current size", bytes2gb($size),      "GB");
+      uls_value("$tstep:$ts_name", "used (lazy)",  bytes2gb($used_lazy), "GB");
+      # That one is now calculated on demand in ULS:
+      # uls_value("$tstep:$ts_name", "free (lazy)", bytes2gb($free_lazy), "GB");
 
-      if (abs($size) > $VERY_SMALL) {
-        uls_value("$tstep:$ts_name", "%used (lazy)", pround(100.0 / $size * $used_lazy, -1), "%");
-      }
+      # if (abs($size) > $VERY_SMALL) {
+      #   uls_value("$tstep:$ts_name", "%used (lazy)", pround(100.0 / $size * $used_lazy, -1), "%");
+      # }
 
       # uls_value("$tstep:$ts_name", "used", pround($used / $MB, -1), "MB");
       # uls_value("$tstep:$ts_name", "free", pround($free / $MB, -1), "MB");
       uls_value("$tstep:$ts_name", "used", bytes2gb($used), "GB");
-      uls_value("$tstep:$ts_name", "free", bytes2gb($free), "GB");
+      # That one is now calculated on demand in ULS:
+      # uls_value("$tstep:$ts_name", "free", bytes2gb($free), "GB");
 
-      if (abs($size) > $VERY_SMALL) {
-        uls_value("$tstep:$ts_name", "%used", pround(100.0 / $size * $used, -1), "%");
+      # if (abs($size) > $VERY_SMALL) {
+      #   uls_value("$tstep:$ts_name", "%used", pround(100.0 / $size * $used, -1), "%");
+      # }
+      # %used is now calculated on "potential max size" and named: %used_pms
+      if (abs($potential_max_size) > $VERY_SMALL) {
+        uls_value("$tstep:$ts_name", "%used_pms", pround(100.0 / $potential_max_size * $used, -1), "%");
       }
+
 
       send_doc($tstep, "$tstep:$ts_name");
 
@@ -1162,10 +1180,13 @@ sub tablespace_usage {
       # uls_value("$tstep:$ts_name", "free", pround($free / $MB, -1), "MB");
       uls_value("$tstep:$ts_name", "size", bytes2gb($size), "GB");
       uls_value("$tstep:$ts_name", "used", bytes2gb($used), "GB");
-      uls_value("$tstep:$ts_name", "free", bytes2gb($free), "GB");
+      # uls_value("$tstep:$ts_name", "free", bytes2gb($free), "GB");
 
-      if (abs($size) > $VERY_SMALL) {
-        uls_value("$tstep:$ts_name", "%used", pround(100.0 / $size * $used, -1), "%");
+      # if (abs($size) > $VERY_SMALL) {
+      #   uls_value("$tstep:$ts_name", "%used", pround(100.0 / $size * $used, -1), "%");
+      # }
+      if (abs($potential_max_size) > $VERY_SMALL) {
+        uls_value("$tstep:$ts_name", "%used_pms", pround(100.0 / $potential_max_size * $used, -1), "%");
       }
 
       send_doc($tstep, "$tstep:$ts_name");
@@ -2391,22 +2412,25 @@ sub system_statistics {
   my $wz = make_value_file($TMPOUT1, $workfile, $WORKFILE_TIMESTAMP, $DELIM);
 
   my @N = (
-    "db block changes",
-    "consistent changes",
-    "DBWR checkpoint buffers written",
-    "execute count",
-    "parse count (total)",
-    "physical reads",
-    "physical writes",
-    "table scan rows gotten",
-    "table fetch continued row",
-    "table scans (long tables)",
-    "table scans (short tables)",
-    "sorts (memory)",
-    "sorts (disk)",
-    "user calls",
-    "user commits",
-    "recursive calls"
+    "db block changes"
+  , "consistent changes"
+  , "DBWR checkpoint buffers written"
+  , "execute count"
+  , "parse count (total)"
+  , "parse count (hard)"
+  , "physical reads"
+  , "physical writes"
+  , "table scan rows gotten"
+  , "table fetch continued row"
+  , "table scans (long tables)"
+  , "table scans (short tables)"
+  , "sorts (memory)"
+  , "sorts (disk)"
+  , "user calls"
+  , "recursive calls"
+  , "user commits"
+  , "transaction rollbacks"
+  , "user rollbacks"
   );
 
   # For flashback:
@@ -2529,6 +2553,10 @@ sub alert_log {
   # my $alert_log = "$bdump/alert_" . $ENV{"ORACLE_SID"} . ".log";
   print "alert log file=$alert_log\n";
 
+  if ( "not found" =~ /$alert_log/i ) {
+    output_error_message(sub_name() . ": Error: Cannot find path to alert.log, check the log file.");
+    return(0);
+  }
   if (! open(LOGFILE, $alert_log)) {
     output_error_message(sub_name() . ": Error: Cannot open '$alert_log' for reading: $!");
     return(0);
@@ -5053,7 +5081,7 @@ max processes:
 
 The Program Global Area (PGA) is a private memory region containing data and control information for a server process. Access to it is exclusive to that server process and is read and written only by the Oracle code acting on behalf of it.
 
-For more information, see the "Oracle® Database Performance Tuning Guide"
+For more information, see the Oracle® Database Performance Tuning Guide.
 
 The automatic PGA Memory Management is enabled, if the PGA_AGGREGATE_TARGET initialization parameter is set to a non-zero value. It cannot be used for shared server connections!
 
@@ -5142,7 +5170,7 @@ cache hit ratio:
 
 The most crucial structure for recovery operations is the redo log, which consists of two or more preallocated files that store all changes made to the database as they occur. Every instance of an Oracle Database has an associated redo log to protect the database in case of an instance failure.
 
-For more information, see the "Oracle® Database Administrator's Guide".
+For more information, see the Oracle® Database Administrator´s Guide.
 
 redo buffer allocation retries:
   Total number of retries a user process must wait to allocate space in the
@@ -5171,7 +5199,7 @@ redo log space requests:
   user process can over write these entries.
 
 redo log space wait time:
-  Total elapsed waiting time for 'redo log space requests'.
+  Total elapsed waiting time for ´redo log space requests´.
 
 redo size:
   Amount of redo generated.
@@ -5192,8 +5220,8 @@ redo writes:
 summary status all members:
   select member, status from v$logfile;
 
-  If the status for any one member is not blank (which is ok), then 'ERROR'
-  is delivered, else 'OK'.
+  If the status for any one member is not blank (which is ok), then ´ERROR´
+  is delivered, else ´OK´.
 
 member status info:
   This is only delivered in case of an error. It shows a list of those redo
@@ -5206,7 +5234,7 @@ member status info:
 
   <status>:
     INVALID: File is inaccessible
-    STALE  : File's contents are incomplete
+    STALE  : File´s contents are incomplete
     DELETED: File is no longer used
 
 redo log switches:
@@ -5217,17 +5245,13 @@ redo log switches:
 *System Statistics
 =================
 
+See also the description by Oracle, e.g. for Oracle 12.1 at https://docs.oracle.com/database/121/REFRN/GUID-2FBC1B7E-9123-41DD-8178-96176260A639.htm
+
+
 consistent changes:
   The number of times a database block has applied rollback entries
   to perform a consistent read on the block.
 
-#consistent gets:
-#  Number of times a consistent read (a logical, buffer I/O) was requested
-#  for a block (original data from rollback segments).
-#
-#consistent gets from cache:
-#  Number of times a consistent read was requested for a block from the buffer cache.
-#
 db block changes:
  This counts the total number of changes that were made to all blocks
  in the SGA that were part of an update or delete operation.
@@ -5240,9 +5264,15 @@ execute count:
   count should be remarkable higher than the parse count.
 
 parse count (total):
-  Count of sql calls (of execute count) that needed to be parsed. An sql call
-  should if possible only be parsed once but executed multiple times.
-  (If not, check if application uses bind variables).
+  Total number of parse calls (hard, soft, and describe). A soft parse
+  is a check on an object already in the shared pool, to verify that
+  the permissions on the underlying object have not changed.
+
+parse count (hard):
+  Total number of parse calls (real parses). A hard parse is a very expensive operation
+  in terms of memory use, because it requires Oracle to allocate a workheap
+  and other memory structures and then build a parse tree.
+  (If this metric has high values, check if application uses bind variables).
 
 physical reads:
   Number of blocks that had to be read from disk.
@@ -5251,27 +5281,27 @@ physical writes:
   Number of blocks that had to be written to disk.
 
 recursive calls:
-  A high figure of recursive calls (compared to total calls) may
-  indicate any of the following:
+  Number of recursive calls generated at both the user and system level.
+  Oracle maintains tables used for internal processing. When Oracle needs to make
+  a change to these tables, it internally generates an internal SQL statement,
+  which in turn generates a recursive call.
+
+  A high figure of recursive calls (compared to total calls) may indicate any of the following:
 
     * Dynamic extension of tables due to poor sizing
-    * Growing and shrinking of rollback segments due to unsuitable
-      OPTIMAL settings
-    * Large amounts of sort to disk resulting in creation and
-      deletion of temporary segments
+    * Growing and shrinking of rollback segments due to unsuitable OPTIMAL settings
+    * Large amounts of sort to disk resulting in creation and deletion of temporary segments
     * Data dictionary misses
-    * Complex triggers, integrity constraints, procedures, functions
-      and/or packages
+    * Complex triggers, integrity constraints, procedures, functions and/or packages
 
 table fetch continued row:
-  When a row spans more than one block during a fetch then this figure is
-  incremented.
-  Retrieving rows that span more than one block increases the logical I/O
-  by a factor that corresponds to the number of blocks than need to be accessed.
-  Exporting and re-importing may eliminate this problem. Taking a closer look
-  at the STORAGE parameters PCT_FREE and PCT_USED. This problem cannot be fixed
-  if rows are larger than database blocks (for example, if the LONG datatype is
-  used and the rows are extremely large).
+  When a row spans more than one block during a fetch then this figure is incremented.
+
+  Retrieving rows that span more than one block increases the logical I/O by a factor
+  that corresponds to the number of blocks than need to be accessed. Exporting and
+  re-importing may eliminate this problem. Evaluate the settings for the storage
+  parameters PCTFREE and PCTUSED. This problem cannot be fixed if rows are larger than
+  database blocks (for example, if the LONG data type is used and the rows are extremely large).
 
 table scan rows gotten:
   The number of rows processed during scan operations.
@@ -5283,6 +5313,12 @@ table scans (long tables):
   performance. High figures for this may indicate lack of indexes on large
   tables or poorly written SQL which fails to use existing indexes or
   is returning a large percentage of the table.
+
+transaction rollbacks:
+  Number of transactions being successfully rolled back.
+
+  These transactions are automatically rolled back by Oracle,
+  this happens for example in case of constraint violation (i.e. Primary Key violation).
 
 sorts (disk):
   The number of sort operations that needed disk writes. Sorts that require
@@ -5305,6 +5341,12 @@ user calls:
 
 user commits:
   The number of committed user transactions.
+
+user rollbacks:
+  Number of times users manually issue the ROLLBACK statement
+  or an error occurs during a user's transaction.
+
+
 
 ###########################
 *Latches
@@ -5335,23 +5377,24 @@ potential max size:
   There is no need to increase the data files until this value 
   has not been reached.
 
-size:
-  Size of the tablespace.
+current size:
+  Current size of the tablespace. It may grow up to potential max size.
 
 used:
   Space used within the tablespace.
   For temporary tablespaces: the sum of the size of all currently
   existing user objects in the tablespace.
 
-free:
-  Free space within the tablespace.
+%used_pms:
+  Percentage of usage in relation to the potential max size.
 
-%used:
-  Percentage of usage (used/size*100).
+     100 * used
+  ------------------
+  potential max size
 
 For temporary tablespaces only:
 
-used (lazy), free (lazy), %used (lazy):
+used (lazy), %used (lazy):
   These figures reflect the "normal" space usage of the temporary
   tablespace. But the space is only reused on demand (lazy) after
   all the free space has been used up.
@@ -5362,13 +5405,11 @@ used (lazy), free (lazy), %used (lazy):
 See:
   http://orafaq.com/node/758)
 
-  Oracle Database Reference
-  10g Release 1 (10.1)
-  Part Number B10755-01
+  and the Oracle Database Reference
 
 Open cursors take up space in the shared pool, in the library cache. To keep a renegade session from filling up the library cache, or clogging the CPU with millions of parse requests, the parameter OPEN_CURSORS is set.
 
-OPEN_CURSORS sets the maximum number of cursors each session can have open. For example, if OPEN_CURSORS is set to 1000, then each session can have up to 1000 cursors open at one time. If a single session has OPEN_CURSORS of cursors open, it will get an ora-1000 error when it tries to open one more cursor.
+OPEN_CURSORS sets the maximum number of cursors each session can have open. For example, if OPEN_CURSORS is set to 1000, then each session can have up to 1000 cursors open at one time. If a single session has OPEN_CURSORS of cursors open, it will get an ORA-1000 error when it tries to open one more cursor.
 
 Raise the OPEN_CURSORS parameter if sessions reach the current limit. If a session continuously gets an ORA-1000, it may indicate a leak in the application code.
 
