@@ -54,6 +54,11 @@
 # 2017-05-31      roveda      0.01
 #   Created
 #
+# 2018-02-14      roveda      0.02
+#     Changed all checks for successful sourcing the environment to
+#     -z "$ORACLE_SID"
+#     instead of
+#     $? -ne 0 (what does not work)
 #
 # ===================================================================
 
@@ -85,9 +90,9 @@ fi
 
 . "$ORAENV"
 
-if [ $? -ne 0 ] ; then
+if [[ -z "$ORACLE_SID" ]] ; then
   echo 
-  echo "Error: Cannot source environment script '$ORAENV' => aborting script"
+  echo "Error: the Oracle environment is not set up correctly => aborting script"
   exit 2
 fi
 

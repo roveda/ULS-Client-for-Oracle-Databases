@@ -7,6 +7,12 @@ There are change annotations in the CHANGES file of the Oracle OpTools
 for watch_oracle.pl which have not been relocated to this file.
 
 # -----
+2018-02-14, roveda
+  Changed all checks for successful sourcing the environment to 
+  -z "$ORACLE_SID"
+  instead of 
+  $? -ne 0 (what does not work)
+
 2018-01-26, roveda
   Added 'parse count (hard)', 'transaction rollbacks' and 'user rollbacks' to system statistics.
   Updated the versions of the used perl modules.
