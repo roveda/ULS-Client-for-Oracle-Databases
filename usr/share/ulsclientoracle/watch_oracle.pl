@@ -3,7 +3,7 @@
 # watch_oracle.pl - monitor a running Oracle database instance
 #
 # ---------------------------------------------------------
-# Copyright 2004-2018, roveda
+# Copyright 2004 - 2018, roveda
 #
 # This file is part of the 'ULS Client for Oracle'.
 # 
@@ -419,6 +419,9 @@
 #   A correct error message is given if the alert.log could not be found
 #   (and not '-not found-').
 #
+# 2018-03-12      roveda      0.81
+#   Added monitoring of failed logins also for unified auditing.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -433,10 +436,10 @@ use File::Copy;
 
 # These are my modules:
 use lib ".";
-use Misc 0.41;
+use Misc 0.42;
 use Uls2 1.16;
 
-my $VERSION = 0.80;
+my $VERSION = 0.81;
 
 # ===================================================================
 # The "global" variables
@@ -3725,6 +3728,199 @@ sub audit_information {
 } # audit_information
 
 
+# -------------------------------------------------------------------
+sub unified_audit_information {
+  # if ($ORACLE_VERSION !~ /^1\d/) { return(1) }
+  if ($ORACLE_MAJOR_VERSION < 12) {return(1) }
+
+  title(sub_name());
+
+  my $ts = "unified audit information";
+
+  my $sql = "";
+
+  # -----
+  # Check if unified_audit_trail is set
+
+  $sql = "
+    variable p varchar2(20)
+    exec :p := 'unified auditing'
+
+    select 'UNIFIED_AUDITING', value from v\$option where lower(PARAMETER) = :p;
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  my $unified_audit_trail = trim(get_value($TMPOUT1, $DELIM, 'UNIFIED_AUDITING'));
+  print "UNIFIED_AUDITING=$unified_audit_trail\n";
+
+  if ($unified_audit_trail !~ /true/i) {
+    print "UNIFIED_AUDITING is not activated!\n";
+    return(0);
+  }
+
+  # -----
+  # Check if audit_trail is set to DB
+
+  $sql = "
+    variable n varchar2(20)
+    exec :n := 'AUDIT_TRAIL'
+
+    select 'AUDIT_TRAIL', value from v\$parameter where upper(name) = :n;
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+  my $audit_trail = trim(get_value($TMPOUT1, $DELIM, 'AUDIT_TRAIL'));
+  print "AUDIT_TRAIL=$audit_trail\n";
+
+  if ($audit_trail !~ /db/i) {
+    print "AUDIT_TRAIL is not set to 'db'!\n";
+    return(0);
+  }
+
+  my $workfile = "$WORKFILEPREFIX.unified_audit_information";
+
+  my $last_dt = get_value($workfile, $DELIM, "last_datetime");
+
+  if ($last_dt !~ /\d{4}/) {
+    # When there are no digits in $last_dt => start now
+    $last_dt = iso_datetime(time - 120*24*60*60);
+    print "First run for '$ts' ever.\n";
+  }
+  print "last processed datetime=$last_dt.\n";
+
+  # Now
+  my $curr_dt = iso_datetime();
+
+  # return_code 0 => Action succeeded
+  # other return_code indicate failure like:
+  #   ORA-01017: invalid username/password; logon denied
+  #   ORA-28000: the account is locked
+
+  $sql = "
+    exec SYS.DBMS_AUDIT_MGMT.FLUSH_UNIFIED_AUDIT_TRAIL;
+
+    variable lastdt varchar2(20)
+    exec :lastdt := '$last_dt'
+
+    variable currdt varchar2(20)
+    exec :currdt := '$curr_dt'
+
+    variable an varchar2(5)
+    exec :an := 'LOGON'
+
+    variable rc number
+    exec :rc := 0
+
+    variable at varchar2(20)
+    exec :at := 'standard'
+
+    select 'logins',
+      count(case when return_code = :rc then 1 end) as successful_logins,
+      count(case when return_code > :rc then 1 end) as failed_logins
+    from unified_audit_trail
+    where action_name = :an
+      and lower(AUDIT_TYPE) = :at
+      and EVENT_TIMESTAMP >  to_date(:lastdt, 'yyyy-mm-dd HH24:MI:SS')
+      and EVENT_TIMESTAMP <= to_date(:currdt, 'yyyy-mm-dd HH24:MI:SS')
+    ;
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+  # successful logins
+  my $successful_logins = trim(get_value($TMPOUT1, $DELIM, 'logins', 2));
+
+  if ( $successful_logins > 0 ) {
+    uls_value($ts, "successful logins", $successful_logins, "#");
+  }
+
+  # failed logins (all returncodes, means all ORA-, no distinction between ORA-1017 and ORA-28000 e.g.)
+  my $failed_logins = trim(get_value($TMPOUT1, $DELIM, 'logins',3));
+
+  if ( $failed_logins > 0 ) {
+
+    uls_value($ts, "failed logins", $failed_logins, "#");
+
+    # Only if this option is set in the configuration file (oracle_tools.conf)
+    if ($OPTIONS =~ /FAILED_LOGIN_REPORT,/) {
+      # Then prepare a report of who has tried to login from where.
+
+      # Remember: you cannot define variables of type DATE
+      # Backslashes are converted to dots.
+      $sql = "
+        variable lastdt varchar2(20)
+        exec :lastdt := '$last_dt'
+
+        variable currdt varchar2(20)
+        exec :currdt := '$curr_dt'
+
+        variable an varchar2(5)
+        exec :an := 'LOGON'
+
+        variable rc number
+        exec :rc := 0
+
+        variable at varchar2(20)
+        exec :at := 'standard'
+
+        select
+            to_char(EVENT_TIMESTAMP,'yyyy-mm-dd HH24:MI:SS')
+          , os_username
+          , userhost
+          , DBUSERNAME
+          , RETURN_CODE
+        from unified_audit_trail
+        where action_name = :an
+          and lower(AUDIT_TYPE) = :at
+          and return_code > :rc
+          and EVENT_TIMESTAMP >  to_date(:lastdt, 'yyyy-mm-dd HH24:MI:SS')
+          and EVENT_TIMESTAMP <= to_date(:currdt, 'yyyy-mm-dd HH24:MI:SS')
+        order by 1,2,3
+        ;
+      ";
+
+      if (! do_sql($sql)) {return(0)}
+      my @L;
+
+      if (get_value_lines(\@L, $TMPOUT1)) {
+        unshift(@L, "TIMESTAMP $DELIM OS USERNAME $DELIM USER HOST $DELIM DB USERNAME $DELIM RETURN CODE");
+
+        my $txt = make_text_report(\@L, $DELIM, "LLLLL", 1);
+
+        # The resulting text report may be too long for a simple text value.
+        #
+        # uls_value($ts, "failed login report", $txt, "_");
+        #
+        # So use a file instead:
+
+        if (write2file($FAILED_LOGIN_REPORT, $txt) ) {
+          uls_file({
+            teststep => $ts
+           ,detail   => "failed login report"
+           ,filename => $FAILED_LOGIN_REPORT
+           ,rename_to => "failed_login_report.txt"
+          });
+        }
+      }
+    } # set as OPTION
+  } # if failed logins
+
+  send_doc($ts);
+
+  # -----
+  # Put the current timestamp of this SQL request into temporary file
+
+  # last_datetime!2018-03-12 13:16:04!
+  print "last_datetime${DELIM}${curr_dt}${DELIM}\n";
+  # print CURRENT "last_datetime${DELIM}${curr_dt}${DELIM}\n";
+  write2file($TMPOUT1, "last_datetime${DELIM}${curr_dt}${DELIM}\n");
+
+  # Build the value file with the current timestamp used in the above SQL
+  make_value_file($TMPOUT1, $workfile, $WORKFILE_TIMESTAMP, $DELIM, 1);
+
+} # unified_audit_information
+
+
 
 # -------------------------------------------------------------------
 sub flashback {
@@ -4541,6 +4737,7 @@ flashback();
 # ----- audit information -----
 
 audit_information();
+unified_audit_information();
 
 # ----- schema information -----
 if ($ONCE_A_DAY) {
