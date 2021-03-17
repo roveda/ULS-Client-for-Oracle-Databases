@@ -3,7 +3,7 @@
 # watch_oracle.pl - monitor a running Oracle database instance
 #
 # ---------------------------------------------------------
-# Copyright 2004 - 2018, roveda
+# Copyright 2004 - 2021, roveda
 #
 # This file is part of the 'ULS Client for Oracle'.
 # 
@@ -405,7 +405,7 @@
 # 2017-09-25      roveda      0.78
 #   Added $ORACLE_VERSION_3D for exact version comparisons.
 #   Column DELEGATE_OPTION does not exist in Oracle versions lower than 12.1.0.2, 
-#   COMMON not in versions lower than 12.1.0.1. So skip admin_db_user() is skipped for 
+#   COMMON not in versions lower than 12.1.0.1. So admin_db_user() is skipped for 
 #   all Oracle versions lower than 12.1.0.2.
 #
 # 2017-12-20      roveda      0.79
@@ -422,6 +422,73 @@
 # 2018-03-12      roveda      0.81
 #   Added monitoring of failed logins also for unified auditing.
 #
+# 2018-10-03      roveda      0.82
+#   Removed a calculation of values that are no longer acquired in sga().
+#
+# 2019-07-06      roveda      0.83
+#   Added support for physical standby databases in Dataguard environments.
+#   Tablespace data and audit data are currently omitted for physical standby.
+#
+# 2019-07-13      roveda      0.84
+#   Bail out from sub if status is not OPEN and DBA_ views are referenced.
+#
+# 2019-09-19      roveda      0.85
+#   Added 'max processes since startup' derived from v$pgastat.
+#
+# 2019-09-30      roveda      0.86
+#   Added dataguard()
+#
+# 2019-10-15      roveda      0.87
+#   Added execution information about the auto optimizer stats collection job
+#   in auto_optimizer_stats_collection().
+#
+# 2019-10-22      roveda      0.88
+#   Added the maintenance window information to auto optimizer stats collection
+#   jobs in auto_optimizer_stats_collection().
+#
+# 2019-11-27      roveda      0.89
+#   Debugged comparisons and the parent db_unique_name in dataguard()
+#
+# 2020-02-04      roveda      0.90
+#   Added blocking_sessions()
+#
+# 2020-03-05      roveda      0.91
+#   Added special filter for alert.log entries witch contain ORA- expressions, 
+#   but as patch description and not as real error entry.
+#   Detect timestamps in the alert.log, use it for output.
+#
+#   The job_info in auto_optimizer_stats_collection() may contain a 'ORA-'
+#   expression, that leads to an error message and the script fails generally.
+#   Therefore, all 'ORA-' expressions in job_info are replaced by 'ORA - '.
+#
+# 2020-08-01      roveda      0.92
+#   Added the full Oracle version for 18 and later.
+#
+# 2020-09-01      roveda      0.93
+#   Use now correct timestamp for 'auto optimizer stats collection'.
+#   Removed 'DBWR checkpoint buffers written' from system statistics.
+#
+# 2020-09-07      roveda      0.94
+#   Added 'compatible' to teststep 'info'.
+#   Optimized the sql for some values in general().
+#
+# 2020-09-30      roveda      0.95
+#   Integrated the PDB tests (now all in this script).
+#
+# 2020-11-26      roveda      0.96
+#   Added smooth transition to new workfile for alert_log().
+#
+# 2021-01-18      roveda      0.97
+#   Current size aof SGA ist now only sent to ULS if it has changed or just once a day.
+#
+# 2021-02-05      roveda      0.98
+#   Added the number of INACTIVE online redo logs in redo_logs().
+#   Added GROUPED_CONNECTIONS. Removed [WATCH_ORACLE_PDBS] from configuration file.
+#
+# 2021-03-17      roveda      1.00
+#   Changed 'blocking sessions' to deliver the final blocking session as simple expression
+#   and not as text report file.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -433,13 +500,15 @@ use strict;
 use warnings;
 use File::Basename;
 use File::Copy;
+use Config::IniFiles;
+use Time::Local;
 
 # These are my modules:
 use lib ".";
-use Misc 0.42;
+use Misc 0.43;
 use Uls2 1.16;
 
-my $VERSION = 0.81;
+my $VERSION = 1.00;
 
 # ===================================================================
 # The "global" variables
@@ -450,6 +519,7 @@ my $CURRPROG;  # Keeps the name of this script.
 # The default command to execute sql commands.
 my $SQLPLUS_COMMAND = 'sqlplus -S "/ as sysdba"';
 
+my $WORKFILE = Config::IniFiles->new();
 my $WORKFILEPREFIX;
 my $TMPOUT1;
 my $LOCKFILE;
@@ -518,15 +588,81 @@ my $IDENTIFIER;
 
 # Keeps the version of the oracle software
 my $ORACLE_VERSION = "";
+# Starting with Oracle 18, you can derive the full Oracle version.
+# For all older versions, this will be the same as ORACLE_VERSION.
+my $ORACLE_VERSION_FULL = "";
+
 my $ORACLE_VERSION_3D = "";
 my $ORACLE_MAJOR_VERSION = "";
 my $ORACLE_MINOR_VERSION = "";
+
+# -----
+# The following two variables indicate a 'normal' instance
+# OPEN / PRIMARY
+# or a standby Dataguard instance.
+# MOUNTED / PHYSICAL STANDBY
+# -----
+# SELECT STATUS FROM V$INSTANCE;
+# { OPEN | MOUNTED }
+my $ORACLE_STATUS = "";
+
+# -----
+# SELECT DATABASE_ROLE FROM V$DATABASE;
+# { PRIMARY | PHYSICAL STANDBY }
+my $ORACLE_DBROLE = "";
+
+
+# Data Guard Role
+my $DG_ROLE = "NONE";
+
+# Keeps the list of all present pdbs (for the current cdb)
+my @PDB_LIST = ();
+
+# Holds the current pdb name (of @PDB_LIST)
+my $CURRENT_PDB = "";
+my $CURRENT_CON_ID = -1;
+
+# Status of the current PDB
+my $PDB_STATUS = "";
+
 
 
 # ===================================================================
 # The subroutines
 # ===================================================================
 
+
+# ------------------------------------------------------------
+sub set_value {
+  # set_value(\$workfile, <section>, <parameter>, <value>);
+  # set_value(\$WORKFILE, "GENERAL", "LAST_RUN", iso_datetime($start_secs));
+
+  # Set a value for a parameter in a section of a pointer to a workfile
+  # that has the structure of an ini-file.
+  # See:
+  #   my $WORKFILE = Config::IniFiles->new();
+
+  my ($rCFG, $section, $parameter, $value) = @_;
+
+  my $ret = undef;
+
+  $$rCFG->AddSection($section);
+
+  if( $$rCFG->val($section, $parameter) ) {
+    $ret = $$rCFG->val($section, $parameter);
+    $$rCFG->setval($section, $parameter, $value );
+  } else {
+    $$rCFG->newval($section, $parameter, $value );
+  }
+
+  # print "section=$section, parameter=$parameter, value=$value\n";
+
+  return($ret);
+
+} # set_value
+
+
+# ------------------------------------------------------------
 sub output_error_message {
   # output_error_message(<message>)
   #
@@ -676,11 +812,25 @@ sub exec_sql {
 
   # connect / as sysdba
 
-  # Set nls_territory='AMERICA' to get decimal points.
+  # Set nls_territory='AMERICA' explicitly to get decimal points.
+
+  my $set_container = "";
+  # For PDBs
+  if ( $CURRENT_PDB ) {
+    print "CURRENT_PDB=$CURRENT_PDB\n";
+    $set_container = "alter session set container=$CURRENT_PDB;";
+  }
+
 
   my $sql = "
     set echo off
+
     alter session set nls_territory='AMERICA';
+    alter session set NLS_DATE_FORMAT='YYYY-MM-DD HH24:MI:SS';
+    alter session set NLS_TIMESTAMP_FORMAT='YYYY-MM-DD HH24:MI:SS';
+    alter session set NLS_TIMESTAMP_TZ_FORMAT='YYYY-MM-DD HH24:MI:SS TZH:TZM';
+
+    $set_container
     set newpage 0
     set space 0
     set linesize 32000
@@ -799,7 +949,7 @@ sub clean_up {
   #
   # Remove all left over files at script end.
 
-  title("Cleaning up");
+  title(sub_name());
 
   # Remove temporary files.
   foreach my $file (@_) {
@@ -820,7 +970,8 @@ sub send_runtime {
   # Current time minus start time.
   my $rt = time - $_[0];
 
-  my $unit = uc($_[1]) || "S";
+  my $unit =  "S";
+  if ( $_[1] ) { $unit = uc($_[1]) }
 
   if    ($unit eq "M") { uls_value($IDENTIFIER, "runtime", pround($rt / 60.0, -1), "min") }
   elsif ($unit eq "H") { uls_value($IDENTIFIER, "runtime", pround($rt / 60.0 / 60.0, -2), "h") }
@@ -866,44 +1017,61 @@ sub general_info {
   # This sub returns a value, whether the rest of the script is
   # executed or not.
 
-  title("General Info");
+  title(sub_name());
 
   my $ts = "Info";
 
-  # That's the file where the line count is stored until the next run.
-  my $workfile = "$WORKFILEPREFIX.general_info";
-
+  # -----
   # Values from last run
-  my $oracle_status_last   = trim(get_value($workfile, $DELIM, "database status"));
-  my $oracle_version_last  = trim(get_value($workfile, $DELIM, "oracle version"));
-  my $hostname_last        = trim(get_value($workfile, $DELIM, "hostname"));
-  my $instname_last        = trim(get_value($workfile, $DELIM, "instance name"));
-  my $logmode_last         = trim(get_value($workfile, $DELIM, "database log mode"));
-  my $instance_startup_at_last  = trim(get_value($workfile, $DELIM, "instance startup at"));
+  my $oracle_status_last   = $WORKFILE->val(sub_name(), "database status", "");
+  my $oracle_dbrole_last   = $WORKFILE->val(sub_name(), "database role", "");
+  my $oracle_version_last  = $WORKFILE->val(sub_name(), "oracle version", "");
+  my $oracle_version_full_last  = $WORKFILE->val(sub_name(), "oracle version full", "");
+  my $hostname_last        = $WORKFILE->val(sub_name(), "hostname", "");
+  my $instname_last        = $WORKFILE->val(sub_name(), "instance name", "");
+  my $logmode_last         = $WORKFILE->val(sub_name(), "database log mode", "");
+  my $instance_startup_at_last  = $WORKFILE->val(sub_name(), "instance startup at", "");
 
   # Will be 1, if any of the values has changed since last run.
   my $something_has_changed = 0;
 
   # Values from this run
-  my $db_status           = "unknown";
+  $ORACLE_STATUS          = "unknown";
+  $ORACLE_DBROLE          = "unknown";
   my $hostname            = "";
   my $instname            = "";
+  my $oracompatible       = "";
   my $logmode             = "";
   my $instance_startup_at = iso_datetime();
+
   $WORKFILE_TIMESTAMP = $instance_startup_at;
 
   # ----- Check if Oracle is available
-  my $sql = "select 'database status', status from v\$instance;";
+  my $sql = "
+    select 'database status', status from v\$instance;
+    SELECT 'database role', DATABASE_ROLE FROM V\$DATABASE;
+  ";
+
+  # STARTED
+  # MOUNTED
+  # OPEN
+  # OPEN MIGRATE
+  #
+  # LOGICAL STANDBY
+  # PHYSICAL STANDBY
+  # PRIMARY
 
   my $abort_msg = "";
 
   if (exec_sql($sql)) {
     if (! errors_in_file($TMPOUT1)) {
 
-      $db_status = trim(get_value($TMPOUT1, $DELIM, "database status"));
+      $ORACLE_STATUS = trim(get_value($TMPOUT1, $DELIM, "database status"));
+      $ORACLE_DBROLE = trim(get_value($TMPOUT1, $DELIM, "database role"));
 
-      if ( ($ONCE_A_DAY)                   ) { $something_has_changed = 1 }
-      if ($db_status ne $oracle_status_last) { $something_has_changed = 1 }
+      if ( ($ONCE_A_DAY)                       )  { $something_has_changed = 1 }
+      if ($ORACLE_STATUS ne $oracle_status_last)  { $something_has_changed = 1 }
+      if ($ORACLE_DBROLE ne $oracle_dbrole_last)  { $something_has_changed = 1 }
 
     } else {
       $abort_msg = "Error: there have been errors when executing the sql statement.";
@@ -917,27 +1085,21 @@ sub general_info {
     # ABORT SCRIPT
 
     # It is a fatal error if that value cannot be derived.
-    uls_value($ts, "database status", $db_status, "[ ]");
+    # uls_value($ts, "database status", $db_status, "[ ]");
+    # uls_value($ts, "database role, status", "$db_role, $db_status", "[ ]");
+    uls_value($ts, "database role, status", "$ORACLE_DBROLE, $ORACLE_STATUS", "[ ]");
+
     output_error_message(sub_name() . ": $abort_msg");
     uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
 
-    my @WF = (
-      "database status${DELIM}$db_status${DELIM}", 
-      "oracle version${DELIM}$ORACLE_VERSION${DELIM}", 
-      "hostname${DELIM}$hostname${DELIM}", 
-      "instance name${DELIM}$instname${DELIM}", 
-      "database log mode${DELIM}$logmode${DELIM}", 
-      "instance startup at${DELIM}$instance_startup_at${DELIM}"
-    );
-
-    print "\n";
-    print "General info for next run:\n";
-    print join("\n", @WF), "\n";
-    print "-----\n";
-    write2file($TMPOUT1, join("\n", @WF) . "\n");
-
-    # Build the value file with the current values.
-    make_value_file($TMPOUT1, $workfile, $WORKFILE_TIMESTAMP, $DELIM, 1);
+    set_value(\$WORKFILE, sub_name(), "database status", $ORACLE_STATUS);
+    set_value(\$WORKFILE, sub_name(), "database role", $ORACLE_DBROLE);
+    # set_value(\$WORKFILE, sub_name(), "oracle version", $ORACLE_VERSION);
+    # set_value(\$WORKFILE, sub_name(), "oracle version full", $ORACLE_VERSION_FULL);
+    # set_value(\$WORKFILE, sub_name(), "hostname", $hostname);
+    # set_value(\$WORKFILE, sub_name(), "instance name", $instname);
+    # set_value(\$WORKFILE, sub_name(), "database log mode", $logmode);
+    # set_value(\$WORKFILE, sub_name(), "instance startup at", $instance_startup_at);
 
     return(0);
   } # ABORT SCRIPT
@@ -945,35 +1107,61 @@ sub general_info {
 
 
   # ----- More information
+
   $sql = "
-    select 'oracle version'     , version       from v\$instance;
-    select 'hostname'           , replace(host_name, '\', '.') from v\$instance;
-    select 'instance name'      , instance_name from v\$instance;
-    select 'instance startup at', TO_CHAR(startup_time,'YYYY-MM-DD HH24:MI:SS') from v\$instance;
-    select 'database log mode'  , log_mode      from v\$database;
+    select 'from_instance', version, replace(host_name, '\', '.'), instance_name, TO_CHAR(startup_time,'YYYY-MM-DD HH24:MI:SS') from v\$instance;
+    select 'database log mode', log_mode from v\$database;
+    select 'oracle compatible', value from v\$parameter where name = 'compatible';
   ";
 
   if (! do_sql($sql)) {return(0)}
 
-  $ORACLE_VERSION     = trim(get_value($TMPOUT1, $DELIM, "oracle version"));
-  # e.g. 10.1.0.3.0, 10.2.0.3.0, 11.2.0.4.0, 12.1.0.2.0
+  # $ORACLE_VERSION     = trim(get_value($TMPOUT1, $DELIM, "oracle version"));
+  $ORACLE_VERSION     = trim(get_value($TMPOUT1, $DELIM, "from_instance", 2));
+  $ORACLE_VERSION_FULL = $ORACLE_VERSION;
+  # e.g. 10.1.0.3.0, 10.2.0.3.0, 11.2.0.4.0, 12.1.0.2.0, 19.0.0.0.0
 
   ($ORACLE_MAJOR_VERSION, $ORACLE_MINOR_VERSION, my $dummy) = split(/\./, $ORACLE_VERSION, 3);
   $ORACLE_MAJOR_VERSION = int($ORACLE_MAJOR_VERSION);
   $ORACLE_MINOR_VERSION = int($ORACLE_MINOR_VERSION);
 
   $ORACLE_VERSION_3D = join(".", map(sprintf("%03d", $_), split(/\./, $ORACLE_VERSION) ) );
-  # e.g. 010.001.000.003.000, 010.002.000.003.000, 011.002.000.004.000, 012.001.000.002.000
+  # e.g. 010.002.000.003.000, 011.002.000.004.000, 012.001.000.002.000, 019.000.000.000.000
   # That allows exact comparisons of Oracle versions.
 
-  $hostname            = trim(get_value($TMPOUT1, $DELIM, "hostname"));
-  $instname            = trim(get_value($TMPOUT1, $DELIM, "instance name"));
-  $instance_startup_at = trim(get_value($TMPOUT1, $DELIM, "instance startup at"));
+  $hostname            = trim(get_value($TMPOUT1, $DELIM, "from_instance", 3));
+  $instname            = trim(get_value($TMPOUT1, $DELIM, "from_instance", 4));
+  $instance_startup_at = trim(get_value($TMPOUT1, $DELIM, "from_instance", 5));
   $WORKFILE_TIMESTAMP = $instance_startup_at;
   $logmode             = trim(get_value($TMPOUT1, $DELIM, "database log mode"));
+  $oracompatible       = trim(get_value($TMPOUT1, $DELIM, "oracle compatible"));
 
+  # -----
+  $sql = "";
+
+  # Only Oracle 18 and later has this column
+  if ($ORACLE_MAJOR_VERSION >= 18) {
+    $sql .= "select 'oracle version full', version_full FROM v\$instance;";
+  }
+  # Only Oracle 12 and later has this column
+  if ($ORACLE_MAJOR_VERSION >= 12) {
+    if ( $sql ) { $sql .= "\n" }
+    $sql .= "select 'is_cdb', cdb from v\$database;";
+  }
+
+  my $is_cdb = "NO";
+  if ($sql ) {
+    if (! do_sql($sql)) {return(0)}
+    my $ovf = trim(get_value($TMPOUT1, $DELIM, "oracle version full"));
+    if ( $ovf ) { $ORACLE_VERSION_FULL = $ovf }
+    $is_cdb = uc(trim(get_value($TMPOUT1, $DELIM, "is_cdb")));
+  }
+
+  # -----
   if ($ONCE_A_DAY                                       ) { $something_has_changed = 1 }
   if ($ORACLE_VERSION      ne $oracle_version_last      ) { $something_has_changed = 1 }
+  if ($ORACLE_VERSION_FULL ne $oracle_version_full_last ) { $something_has_changed = 1 }
+  if ($ORACLE_DBROLE       ne $oracle_dbrole_last       ) { $something_has_changed = 1 }
   if ($hostname            ne $hostname_last            ) { $something_has_changed = 1 }
   if ($instname            ne $instname_last            ) { $something_has_changed = 1 }
   if ($logmode             ne $logmode_last             ) { $something_has_changed = 1 }
@@ -981,8 +1169,16 @@ sub general_info {
 
   if ( $something_has_changed ) {
     # Send all values to ULS.
-    uls_value($ts, "database status", $db_status, "[ ]");
+    # uls_value($ts, "database status", $db_status, "[ ]");
+    uls_value($ts, "database role, status", "$ORACLE_DBROLE, $ORACLE_STATUS", "[ ]");
     uls_value($ts, "oracle version", $ORACLE_VERSION, "[ ]");
+
+    # Only if the version differs from the full version
+    if ($ORACLE_VERSION_FULL ne $ORACLE_VERSION) {
+      uls_value($ts, "oracle version full", $ORACLE_VERSION_FULL, "[ ]");
+    }
+    uls_value($ts, "compatible", $oracompatible, "[ ]");
+
     uls_value($ts, "hostname", $hostname, "[ ]");
     uls_value($ts, "instance name", $instname, "[ ]");
     uls_value($ts, "database log mode", $logmode, "[ ]");
@@ -991,45 +1187,140 @@ sub general_info {
 
   # -----
   # Save values of this run to workfile.
-  my @WF = (
-    "database status${DELIM}$db_status${DELIM}",
-    "oracle version${DELIM}$ORACLE_VERSION${DELIM}",
-    "hostname${DELIM}$hostname${DELIM}",
-    "instance name${DELIM}$instname${DELIM}",
-    "database log mode${DELIM}$logmode${DELIM}",
-    "instance startup at${DELIM}$instance_startup_at${DELIM}"
-  );
-
-  print "\n";
-  print "General info for next run:\n";
-  print join("\n", @WF), "\n";
-  print "-----\n";
-  write2file($TMPOUT1, join("\n", @WF) . "\n");
-
-  # Build the value file with the current values.
-  make_value_file($TMPOUT1, $workfile, $WORKFILE_TIMESTAMP, $DELIM, 1);
+  set_value(\$WORKFILE, sub_name(), "database status", $ORACLE_STATUS);
+  set_value(\$WORKFILE, sub_name(), "database role", $ORACLE_DBROLE);
+  set_value(\$WORKFILE, sub_name(), "oracle version", $ORACLE_VERSION);
+  set_value(\$WORKFILE, sub_name(), "oracle version full", $ORACLE_VERSION_FULL);
+  set_value(\$WORKFILE, sub_name(), "hostname", $hostname);
+  set_value(\$WORKFILE, sub_name(), "instance name", $instname);
+  set_value(\$WORKFILE, sub_name(), "database log mode", $logmode);
+  set_value(\$WORKFILE, sub_name(), "instance startup at", $instance_startup_at);
 
   # -----
   send_doc($ts);
 
+  # -----
+  if ( $is_cdb ne 'YES' ) {
+    print "This is not a container database, no pluggable databases.\n";
+    # No error, just leave the sub.
+    return(1);  # ok
+  } 
+  # -----------------------------------------------------------------
+
+  # Ok, we got pluggable databases
+  # Leave out the PDBSEED
+
+  $sql = "SELECT NAME, CON_ID FROM V\$PDBS WHERE CON_ID > 2 ORDER BY CON_ID;";
+  if (! do_sql($sql)) {return(0)}
+
+  # -----
+  # Fill the global @PDB_LIST with all pdb names
+
+  my @pdbs;
+  get_value_lines(\@pdbs, $TMPOUT1);
+
+  # Walk over all lines (which are PDBs)
+  # Remember: each line contains a delimiter.
+
+  foreach my $pdb (@pdbs) {
+
+    my @p = split($DELIM, $pdb);
+    @p = map(trim($_), @p);
+    # There is only one PDB per line
+    my ($p, $conid) = @p;
+
+    push(@PDB_LIST, "$p|$conid");
+  }
+
   return(1); # ok
 } # general_info
+
+
+
+# ===================================================================
+sub general_pdb_info {
+  # Gather some general info about the current pluggable database
+
+  # This sub returns a value, whether the rest of the script is
+  # executed or not.
+
+  title(sub_name());
+
+  my $ts = "Info PDB";
+
+  # Values from last run
+  my $last_open_mode = $WORKFILE->val(sub_name(), "open_mode_$CURRENT_PDB", "");
+  my $last_open_time = $WORKFILE->val(sub_name(), "open_time_$CURRENT_PDB", "");
+
+  print "last_open_mode=$last_open_mode, last_open_time=$last_open_time\n";
+
+  my $sql = "
+    select 'info', NAME, OPEN_MODE, OPEN_TIME, TOTAL_SIZE, BLOCK_SIZE from V\$PDBS where con_id = $CURRENT_CON_ID;
+    select 'instance_name', instance_name from v\$instance;
+  ";
+  if (! do_sql($sql)) {return(0)}
+
+  my $pdb_name    = trim(get_value($TMPOUT1, $DELIM, "info", 2));
+  my $open_mode   = trim(get_value($TMPOUT1, $DELIM, "info", 3));
+  my $open_time   = trim(get_value($TMPOUT1, $DELIM, "info", 4));
+  my $total_size  = trim(get_value($TMPOUT1, $DELIM, "info", 5));
+  my $block_size  = trim(get_value($TMPOUT1, $DELIM, "info", 6));
+  my $cdb_name    = trim(get_value($TMPOUT1, $DELIM, "instance_name", 2));
+
+  $total_size = sprintf("%0.1f", $total_size / 1024 / 1024 / 1024);
+  $block_size = sprintf("%d", $block_size / 1024);
+
+  print "cdb_name=$cdb_name, pdb_name=$pdb_name, open_mode=$open_mode, open_time=$open_time\n";
+  print "total_size=$total_size GB, block_size=$block_size Byte\n";
+
+  $WORKFILE_TIMESTAMP = $open_time;
+
+  # if ( $total_size =~ /^\d+$/) { $total_size = sprintf("%0.1f", $total_size / 1024 / 1024 / 1024) }
+
+  # Will be 1, if any of the values has changed since last run.
+  my $something_has_changed = 0;
+
+  if ($ONCE_A_DAY                    ) { $something_has_changed = 1 }
+  if ($last_open_mode  ne  $open_mode) { $something_has_changed = 1 }
+  if ($last_open_time  ne  $open_time) { $something_has_changed = 1 }
+
+  if ( $something_has_changed ) {
+    # Send all values to ULS.
+    uls_value($ts, "pdb name", "$pdb_name", "[ ]");
+    uls_value($ts, "cdb name", "$cdb_name", "[ ]");
+    uls_value($ts, "open mode", $open_mode, "[ ]");
+    uls_value($ts, "open time", $open_time, "{DT}");
+    uls_value($ts, "total size", $total_size, "GB");
+    uls_value($ts, "block size", $block_size, "kB");
+  }
+
+  set_value(\$WORKFILE, sub_name(), "open_mode_$CURRENT_PDB", $open_mode);
+  set_value(\$WORKFILE, sub_name(), "open_time_$CURRENT_PDB", $open_time);
+
+  # -----
+  send_doc($ts);
+
+} # general_pdb_info
+
 
 
 # ===================================================================
 sub tablespace_usage {
 
   # -----------------------------------------------------------------
-  title("tablespace usage");
+  title(sub_name());
 
   my $tstep = "tablespace usage";
+
+  if ($ORACLE_STATUS !~ /OPEN/) {
+    print "Database status is not OPEN, but $ORACLE_STATUS. Cannot access the necessary views, this sub is skipped.\n";
+    return(1)
+  }
 
   # -----
   # List of all tablespaces and their contents (PERMANENT, TEMP, UNDO, ...)
 
-  my $sql = "
-    select tablespace_name, contents from dba_tablespaces order by 1;
-  ";
+  my $sql = "select tablespace_name, contents from dba_tablespaces order by 1; ";
 
   if (! do_sql($sql)) {return(0)}
 
@@ -1105,8 +1396,10 @@ sub tablespace_usage {
       # uls_value("$tstep:$ts_name", "used (lazy)", pround($used_lazy / $MB, -1), "MB");
       # uls_value("$tstep:$ts_name", "free (lazy)", pround($free_lazy / $MB, -1), "MB");
       # uls_value("$tstep:$ts_name", "size",        bytes2gb($size),      "GB");
+
       uls_value("$tstep:$ts_name", "current size", bytes2gb($size),      "GB");
       uls_value("$tstep:$ts_name", "used (lazy)",  bytes2gb($used_lazy), "GB");
+
       # That one is now calculated on demand in ULS:
       # uls_value("$tstep:$ts_name", "free (lazy)", bytes2gb($free_lazy), "GB");
 
@@ -1116,13 +1409,16 @@ sub tablespace_usage {
 
       # uls_value("$tstep:$ts_name", "used", pround($used / $MB, -1), "MB");
       # uls_value("$tstep:$ts_name", "free", pround($free / $MB, -1), "MB");
+
       uls_value("$tstep:$ts_name", "used", bytes2gb($used), "GB");
+
       # That one is now calculated on demand in ULS:
       # uls_value("$tstep:$ts_name", "free", bytes2gb($free), "GB");
 
       # if (abs($size) > $VERY_SMALL) {
       #   uls_value("$tstep:$ts_name", "%used", pround(100.0 / $size * $used, -1), "%");
       # }
+
       # %used is now calculated on "potential max size" and named: %used_pms
       if (abs($potential_max_size) > $VERY_SMALL) {
         uls_value("$tstep:$ts_name", "%used_pms", pround(100.0 / $potential_max_size * $used, -1), "%");
@@ -1181,13 +1477,16 @@ sub tablespace_usage {
       # uls_value("$tstep:$ts_name", "size", pround($size / $MB, -1), "MB");
       # uls_value("$tstep:$ts_name", "used", pround($used / $MB, -1), "MB");
       # uls_value("$tstep:$ts_name", "free", pround($free / $MB, -1), "MB");
+
       uls_value("$tstep:$ts_name", "size", bytes2gb($size), "GB");
       uls_value("$tstep:$ts_name", "used", bytes2gb($used), "GB");
+
       # uls_value("$tstep:$ts_name", "free", bytes2gb($free), "GB");
 
       # if (abs($size) > $VERY_SMALL) {
       #   uls_value("$tstep:$ts_name", "%used", pround(100.0 / $size * $used, -1), "%");
       # }
+
       if (abs($potential_max_size) > $VERY_SMALL) {
         uls_value("$tstep:$ts_name", "%used_pms", pround(100.0 / $potential_max_size * $used, -1), "%");
       }
@@ -1241,7 +1540,7 @@ sub wait_event_classes {
   # There are sometimes negative differences for wait class 'Other', 
   # don't know why! I ignore that like 'Idle'.
 
-  title("wait event classes");
+  title(sub_name());
 
   # Not available before Oracle 10
   # if ($ORACLE_VERSION !~ /^1\d/) { return(1) }
@@ -1372,7 +1671,7 @@ sub wait_event_classes {
 # ===================================================================
 sub wait_events {
 
-  title("wait events");
+  title(sub_name());
 
   my $ts = "wait events";
 
@@ -1435,19 +1734,23 @@ sub wait_events {
 # ===================================================================
 sub sessions_processes {
 
-  # title("sessions and processes");
-  title("processes");
+  title(sub_name());
 
   # my $ts = "sessions and processes";
   my $ts = "processes";
+
+  #  -- select 'sessions', count(*) from v\$session;
 
   my $sql = "
     variable n varchar2(10)
     exec :n := 'processes'
 
+    variable mpcn varchar2(20)
+    exec :mpcn := 'max processes count'
+
     select 'processes', count(*) from v\$process;
-    -- select 'sessions', count(*) from v\$session;
     select 'max_processes', value from v\$parameter where lower(name)  = :n ;
+    select 'max_processes_since_startup', value from v\$pgastat where lower(name) = :mpcn;
   ";
 
   if (! do_sql($sql)) {return(0)}
@@ -1455,6 +1758,7 @@ sub sessions_processes {
   my $P = trim(get_value($TMPOUT1, $DELIM, "processes"));
   # my $S = trim(get_value($TMPOUT1, $DELIM, "sessions"));
   my $M = trim(get_value($TMPOUT1, $DELIM, "max_processes"));
+  my $MPC = trim(get_value($TMPOUT1, $DELIM, "max_processes_since_startup"));
 
   if ( $ONCE_A_DAY ) {
     uls_value($ts, "max processes", $M, "#");
@@ -1462,6 +1766,7 @@ sub sessions_processes {
 
   uls_value($ts, "processes", $P, "#");
   # uls_value($ts, "sessions", $S, "#");
+  uls_value($ts, "max processes since startup", $MPC, "#");
 
   send_doc($ts);
 
@@ -1471,9 +1776,103 @@ sub sessions_processes {
 
 
 # ===================================================================
+sub sessions_processes_pdb {
+
+  title(sub_name());
+
+  # my $ts = "sessions and processes";
+  my $ts = "processes";
+
+  # -- select 'sessions', count(*) from v\$session;
+  # -- select 'max_processes', value from v\$parameter where lower(name)  = :n ;
+
+  my $sql = "
+    variable n varchar2(10)
+    exec :n := 'processes'
+
+    variable mpcn varchar2(20)
+    exec :mpcn := 'max processes count'
+
+    select 'processes', count(*) from v\$process where con_id = $CURRENT_CON_ID;
+    select 'max_processes_since_startup', value from v\$pgastat where lower(name) = :mpcn;
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  my $P = trim(get_value($TMPOUT1, $DELIM, "processes"));
+  # my $S = trim(get_value($TMPOUT1, $DELIM, "sessions"));
+  # my $M = trim(get_value($TMPOUT1, $DELIM, "max_processes"));
+  my $MPC = trim(get_value($TMPOUT1, $DELIM, "max_processes_since_startup"));
+
+  #if ( $ONCE_A_DAY ) {
+  #  uls_value($ts, "max processes", $M, "#");
+  #}
+
+  uls_value($ts, "processes", $P, "#");
+  # uls_value($ts, "sessions", $S, "#");
+  uls_value($ts, "max processes since startup", $MPC, "#");
+
+  send_doc($ts);
+
+  return(1);
+
+} # sessions_processes_pdb
+
+
+# ===================================================================
+sub grouped_connections {
+
+  title(sub_name());
+
+  my $ts = "grouped connections";
+
+  my $and_con_id = "";
+  if ( $CURRENT_PDB ) {
+    $and_con_id = " and prc.con_id = $CURRENT_CON_ID and prc.con_id = ses.con_id "
+    # That may not be placed in a single line,
+    # always attach that to an already existing line.
+  }
+
+  #  -- and machine != UTL_INADDR.get_host_name
+
+  my $sql = "
+    select ses.program, ses.machine, ses.osuser, ses.username, count(*)
+    from v\$process prc, v\$session ses
+    where prc.addr = ses.paddr   $and_con_id
+      and ses.username is not null
+    group by ses.program, ses.machine, ses.osuser, ses.username
+    ;
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  my @L;
+
+  get_value_lines(\@L, $TMPOUT1);
+
+  foreach my $Line (@L) {
+
+    my @E = split($DELIM, $Line);
+    @E = map(trim($_), @E);
+    my ($prog, $mach, $osus, $dbus, $cnt) = @E;
+
+    my $tstep = "$ts: $prog: $mach: $osus: $dbus";
+    uls_value($tstep, "count", $cnt, "#");
+    send_doc($ts, $tstep);
+
+  } # foreach
+
+  return(1);
+} # grouped_connections
+
+
+# ===================================================================
 sub rollback_segment_summary {
 
-  title("rollback segments");
+  title(sub_name());
+
+  # TODO
+  # this sub needs correction for CDB/PDB usage
 
   my $TS = "rollback segments";
 
@@ -1540,6 +1939,10 @@ sub rollback_segment_summary {
 sub library_caches {
   # memory : shared pool : library cache
 
+  # TODO
+  # this sub needs correction for CDB/PDB usage
+
+
   # select namespace, gethitratio from v$librarycache;
   # GETS GETHITS GETHITRATIO PINS PINHITS PINHITRATIO
   # RELOADS INVALIDATIONS DLM_LOCK_REQUESTS DLM_PIN_REQUESTS
@@ -1560,7 +1963,7 @@ sub library_caches {
   # JAVA RESOURCE    .272727273       .1875
   # JAVA DATA        .989473684   .99338843
 
-  title("library caches");
+  title(sub_name());
 
   my $ts = "library cache";
 
@@ -1655,7 +2058,7 @@ sub library_caches {
 # ===================================================================
 sub buffer_cache_hit_ratio9 {
 
-  title("buffer cache hit ratio, Oracle 9");
+  title(sub_name());
 
   my ($ts, $workfile) = @_;
 
@@ -1706,7 +2109,7 @@ sub buffer_cache_hit_ratio9 {
 sub buffer_cache9 {
   # memory : buffer cache
 
-  title("buffer cache (Oracle 9)");
+  title(sub_name());
 
   my $ts = "buffer cache (simple)";
 
@@ -1763,7 +2166,7 @@ sub buffer_cache9 {
 # ===================================================================
 sub buffer_cache_hit_ratio10_obsolete {
 
-  title("buffer cache hit ratio, Oracle 10");
+  title(sub_name());
 
   my ($ts, $workfile) = @_;
 
@@ -1819,7 +2222,7 @@ sub buffer_cache_hit_ratio10_obsolete {
 
 # ===================================================================
 sub buffer_cache_hit_ratio10 {
-  title("buffer cache hit ratio, Oracle 10, Oracle 11");
+  title(sub_name());
 
   my ($ts) = @_;
 
@@ -1907,9 +2310,12 @@ sub buffer_cache {
 
   # see e.g. http://www.praetoriate.com/t_v$buffer_pool_statistics.htm
 
+  # TODO
+  # this sub needs correction for CDB/PDB usage
+  # Although only CON_ID=0 is currently found in the table data.
+
 
   # for Oracle 9.2
-  # if ($ORACLE_VERSION =~ /^9/) { 
   if ($ORACLE_MAJOR_VERSION < 10) {
     # Use the old style for Oracle 9
     return(buffer_cache9());
@@ -1917,7 +2323,7 @@ sub buffer_cache {
 
   # Here only for Oracle 10, 11
 
-  title("buffer cache");
+  title(sub_name());
 
   my $ts = "buffer cache";
 
@@ -1966,7 +2372,19 @@ sub buffer_cache {
 sub shared_pool {
   # memory : shared pool
 
-  title("shared pool");
+  # TODO
+  # this sub needs correction for CDB/PDB usage
+  # Although only CON_ID=0 is currently found in V$sga_dynamic_components.
+  # V$SGASTAT has (!) metrics for each container separately, but  
+  # 'free memory' does (currently) only exist once for the complete shared pool.
+  # So, this should work correctly for the cdb, but does not make sense for pdbs.
+
+  title(sub_name());
+
+  if ( $CURRENT_PDB ) {
+    print "This sub does not deliver any metrics for pdbs, return without action.\n";
+    return(1);
+  }
 
   my $ts = "shared pool";
 
@@ -2008,7 +2426,11 @@ sub shared_pool {
 # ===================================================================
 sub dictionary_cache {
 
-  title("general dictionary cache statistics");
+  # TODO
+  # this sub needs correction for CDB/PDB usage
+  # Although only CON_ID=0 is currently found in the table data.
+
+  title(sub_name());
 
   my $ts = "dictionary cache";
 
@@ -2055,7 +2477,11 @@ sub dictionary_cache {
 sub dictionary_cache_detailed {
   # Generates a more detailed dictionary cache statistic.
 
-  title("detailed dictionary cache statistics");
+  # TODO
+  # this sub needs correction for CDB/PDB usage
+  # Although only CON_ID=0 is currently found in the table data.
+
+  title(sub_name());
 
   my $ts = "dictionary cache";
 
@@ -2123,9 +2549,96 @@ sub dictionary_cache_detailed {
 
 
 # ===================================================================
+sub consumed_resources {
+
+  title(sub_name());
+
+  if ( ! $CURRENT_PDB ) {
+    print "This sub is only usable for pluggable databases, do nothing\n";
+    return(0);
+  }
+
+  my $ts = "consumed resources";
+
+  # Use the entries of the last 10 minutes.
+  my $last_dt = iso_datetime(time - 10*60);
+
+  # -----
+  #
+  # SELECT con_id
+  #       , sum(iops)                -- I/O operations per second
+  #       , sum(iombps)              -- I/O megabytes per second
+  #       , sum(CPU_CONSUMED_TIME)   -- in msec
+  #       , max(SGA_BYTES)           -- current SGA usage by this PDB
+  #       , max(BUFFER_CACHE_BYTES)  -- current usage of the buffer cache by this PDB
+  #       , max(SHARED_POOL_BYTES)   -- current usage of the shared pool by this PDB
+  #       , max(PGA_BYTES)           -- current PGA usage by this PDB
+  # FROM   v$rsrcpdbmetric_history r
+  # WHERE  r.con_id = 3
+  # AND    begin_time > sysdate - 10 / (24 * 60)
+  # group by con_id
+  # ORDER BY con_id;
+
+  # Sum or max metrics for the last 10 min are retrieved.
+  # A 10 min cycle of script invocation is assumed.
+
+  my $sql = "
+    variable lastdt varchar2(20)
+    exec :lastdt := '$last_dt'
+
+    SELECT 'resource_consumption'
+          , avg(iops)
+          , avg(iombps)
+          , avg(CPU_CONSUMED_TIME)
+          , avg(SGA_BYTES)
+          , avg(BUFFER_CACHE_BYTES)
+          , avg(SHARED_POOL_BYTES)
+          , avg(PGA_BYTES)
+    FROM   v\$rsrcpdbmetric_history
+    WHERE con_id = $CURRENT_CON_ID
+      AND  to_char(begin_time, 'YYYY-MM-DD HH24:MI:SS') >= :lastdt
+    group by con_id;
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  my $iops        = trim(get_value($TMPOUT1, $DELIM, "resource_consumption", 2));
+  my $iombps      = trim(get_value($TMPOUT1, $DELIM, "resource_consumption", 3));
+  my $cpu_time    = trim(get_value($TMPOUT1, $DELIM, "resource_consumption", 4));
+  my $sga_bytes   = trim(get_value($TMPOUT1, $DELIM, "resource_consumption", 5));
+  my $bc_bytes    = trim(get_value($TMPOUT1, $DELIM, "resource_consumption", 6));
+  my $sp_bytes    = trim(get_value($TMPOUT1, $DELIM, "resource_consumption", 7));
+  my $pga_bytes   = trim(get_value($TMPOUT1, $DELIM, "resource_consumption", 8));
+
+  $iops      = sprintf("%0.1f", $iops   );
+  $iombps    = sprintf("%0.1f", $iombps );
+  $cpu_time  = sprintf("%0.1f", $cpu_time   );
+  $sga_bytes = sprintf("%0.1f", $sga_bytes / 1024 / 1024 );
+  $bc_bytes  = sprintf("%0.1f", $bc_bytes  / 1024 / 1024 );
+  $sp_bytes  = sprintf("%0.1f", $sp_bytes  / 1024 / 1024 );
+  $pga_bytes = sprintf("%0.1f", $pga_bytes / 1024 / 1024 );
+
+  uls_value($ts, "avg iops", $iops, "1/s");
+  uls_value($ts, "avg iombps", $iombps, "MB/s");
+  uls_value($ts, "cpu consumed time", $cpu_time, "ms");
+  uls_value($ts, "SGA usage", $sga_bytes, "MB");
+  uls_value($ts, "buffer cache usage", $bc_bytes, "MB");
+  uls_value($ts, "shared pool usage", $sp_bytes, "MB");
+  uls_value($ts, "PGA usage", $pga_bytes, "MB");
+
+  send_doc($ts);
+
+} # consumed_resources
+
+
+
+# ===================================================================
 sub sga {
 
-  title("sga");
+  # TODO
+  # this sub needs correction for CDB/PDB usage
+  # Although only CON_ID=0 is currently found in the table data.
+  title(sub_name());
 
   my $ts = "sga";
 
@@ -2145,27 +2658,28 @@ sub sga {
   #  select 'free memory', current_size from v\$sga_dynamic_free_memory;
   #";
 
+  # Values from last run
+  my $sga_size_last   = $WORKFILE->val(sub_name(), "sga_size", "0");
+
   # select 'free memory', current_size from v\$sga_dynamic_free_memory;
 
-  my $sql = "
-    select 'overall size', sum(value) from v\$sga;
-  ";
+  my $sql = "select 'overall size', sum(value) from v\$sga;";
 
   if (! do_sql($sql)) {return(0)}
 
-  my $size = trim(get_value($TMPOUT1, $DELIM, "overall size"));
-  $size = pround($size/$MB, -1);
+  my $sga_size = trim(get_value($TMPOUT1, $DELIM, "overall size"));
+  $sga_size = pround($sga_size/$MB, -1);
 
-  my $free = trim(get_value($TMPOUT1, $DELIM, "free memory"));
-  $free = pround($free/$MB, -1);
+  # my $free = trim(get_value($TMPOUT1, $DELIM, "free memory"));
+  # $free = pround($free/$MB, -1);
 
-  uls_value_nodup({
-     teststep  => $ts
-   , detail    => "overall size"
-   , value     => $size
-   , unit      => "MB"
-   , elapsed   => $DEFAULT_ELAPSED
-  });
+  # uls_value_nodup({
+  #    teststep  => $ts
+  #  , detail    => "overall size"
+  #  , value     => $size
+  #  , unit      => "MB"
+  #  , elapsed   => $DEFAULT_ELAPSED
+  # });
 
   # uls_value_nodup({
   #    teststep  => $ts
@@ -2175,6 +2689,13 @@ sub sga {
   #  , elapsed   => $DEFAULT_ELAPSED
   # });
 
+  if ( ($ONCE_A_DAY) or ($sga_size_last != $sga_size) ) {
+    uls_value($ts, "overall size", $sga_size, "MB");
+
+  }
+
+  set_value(\$WORKFILE, sub_name(), "sga_size", $sga_size);
+
   send_doc($ts);
 
 } # sga
@@ -2183,7 +2704,12 @@ sub sga {
 # ===================================================================
 sub pga {
 
-  title("pga");
+  # Currently, for Oracle 19.8, this select is correct.
+  # V$PGASTAT only contains values for CON_ID=0 but these values
+  # are different depending on the current container.
+  # So, this is a bit confusing.
+
+  title(sub_name());
 
   my $ts = "pga";
 
@@ -2272,7 +2798,7 @@ sub pga {
 # ===================================================================
 sub redo_logs {
 
-  title("redo logs");
+  title(sub_name());
 
   my $ts = "redo logs";
 
@@ -2304,6 +2830,11 @@ sub redo_logs {
     exec :s := 'CURRENT'
 
     select 'redo log switches', SEQUENCE# from v\$log where STATUS = :s;
+
+    variable s2 varchar2(10)
+    exec :s2 := 'INACTIVE'
+
+    select 'inactive redo logs', count(*) FROM v\$log where STATUS = :s2;
   ";
 
   if (! do_sql($sql)) {return(0)}
@@ -2356,6 +2887,11 @@ sub redo_logs {
   $v = trim(delta_value($workfile, $TMPOUT1, $DELIM, $n));
   push(@u, "$n:$v:#");
 
+  $n = "inactive redo logs";
+  #  Sum of inactive redo log file to get a limit alert if zero
+  $v = trim(get_value($workfile, $DELIM, $n));
+  push(@u, "$n:$v:#");
+
   if (! $wz) {uls_nvalues($ts, \@u)}
 
   make_value_file($TMPOUT1, $workfile, $WORKFILE_TIMESTAMP, $DELIM, 1);
@@ -2401,7 +2937,11 @@ sub redo_logs {
 # ===================================================================
 sub system_statistics {
 
-  title("system statistics");
+  # TODO: 
+  # V$SYSSTAT contains a column CON_ID but it is 0 for all entries. 
+  # Although the metrics seem to be different in the cdb and in the pdbs.
+
+  title(sub_name());
 
   my $ts = "system statistics";
 
@@ -2414,10 +2954,10 @@ sub system_statistics {
 
   my $wz = make_value_file($TMPOUT1, $workfile, $WORKFILE_TIMESTAMP, $DELIM);
 
+  # , "DBWR checkpoint buffers written"
   my @N = (
     "db block changes"
   , "consistent changes"
-  , "DBWR checkpoint buffers written"
   , "execute count"
   , "parse count (total)"
   , "parse count (hard)"
@@ -2474,6 +3014,8 @@ sub system_statistics {
 
 # ===================================================================
 sub find_alert {
+
+  title(sub_name());
 
   my $bdump = "";
 
@@ -2538,7 +3080,7 @@ sub find_alert {
 # ===================================================================
 sub alert_log {
 
-  title("alert log");
+  title(sub_name());
 
   # Transfer lines containing error messages from the alert.log file
   # to the ULS. An error count is also transferred, it is zero, when
@@ -2573,8 +3115,19 @@ sub alert_log {
   # That's the file where the line count is stored until the next run.
   my $workfile = "$WORKFILEPREFIX.alert_log_position";
 
-  my $last_pos = get_value($workfile, $DELIM, "last_position");
+  # my $last_pos = get_value($workfile, $DELIM, "last_position");
+  my $last_pos = $WORKFILE->val(sub_name(), "last_position_in_alert", "");
   print "last processed position (found in workfile)=$last_pos\n";
+
+  if ($last_pos !~ /\d+/) {
+    # Try to use the old workfile
+    print "Position not found in new workfile, try the old workfile.\n";
+    # That's the file where the line count is stored until the next run.
+    my $wrkfile = "$WORKFILEPREFIX.alert_log_position";
+
+    $last_pos = get_value($wrkfile, $DELIM, "last_position");
+    print "last processed position (found in old workfile)=$last_pos\n";
+  }
 
   if ($last_pos !~ /\d+/) {
     # When there are no digits in $last_pos => very first run of script.
@@ -2595,6 +3148,10 @@ sub alert_log {
   if (seek(LOGFILE, $last_pos, 0)) {
     # Keeps error messages from alert file until sent to ULS.
     my @ORA = ();
+
+    # Holds the last found timestamp in alert.log
+    # must be like: 2020-03-04T08:28:54...
+    my $last_ts = "";
 
     my $line_count = 0;
     my $error_count = 0;
@@ -2623,11 +3180,25 @@ sub alert_log {
       # print $L;
       chomp($L);
 
+      # Test for timestamp
+      # 2020-03-04T08:28:54.684445+01:00
+      if ( $L =~ /^\d\d\d\d\-\d\d\-\d\dT\d\d:\d\d:\d\d/ ) {
+        # line is a time stamp, 12.1+
+        $last_ts = $L;
+      }
+
       # -----
       # Check for "ORA-"
       if ($L =~ /ORA-/) {
-        push(@ORA, $L);
-        $error_count ++;
+        if ( $L =~ /^patch description/i ) {
+          print "Special Case:\n";
+          print "Last timestamp: $last_ts\n";
+          print "$L \n";
+          print "The above line contains ORA- in conjunction with a patch description => ignored\n";
+        } else {
+          push(@ORA, $L);
+          $error_count ++;
+        }
       }
 
       # -----
@@ -2716,7 +3287,6 @@ sub alert_log {
       }
 
 
-
       # -----
       # Keep only the last 20 lines.
       # (If there are more than that)
@@ -2751,15 +3321,7 @@ sub alert_log {
     return(0);
   }
 
-  # --- Put that value into temporary file
-  #
-  # last_position!23456!
-  print "last_position${DELIM}${last_pos}${DELIM}\n";
-  # print CURRENT "last_position${DELIM}${last_pos}${DELIM}\n";
-  write2file($TMPOUT1, "last_position${DELIM}${last_pos}${DELIM}\n");
-
-  # Build the value file with the currently calculated position.
-  make_value_file($TMPOUT1, $workfile, $WORKFILE_TIMESTAMP, $DELIM, 1);
+  set_value(\$WORKFILE, sub_name(), "last_position_in_alert", $last_pos);
 
   send_doc($ts);
 
@@ -2776,12 +3338,23 @@ sub get_objects_in_buffer {
   #
   # get_objects_in_buffer('DEFAULT', 16384);
 
+  # TODO: Check if that needs to be changed for non-cdb environments.
+
+  title(sub_name());
+
   my ($buffer, $block_size) = @_;
 
   my $buffer_name = "$buffer (" . sprintf("%d", $block_size / 1024) . "k)";
   # e.g. 'DEFAULT (16k)'
 
-  title("Objects in Buffer Cache '$buffer_name'");
+  title(sub_name());
+
+  print "Objects in Buffer Cache: '$buffer_name'\n";
+
+  if ($ORACLE_STATUS !~ /OPEN/) {
+    print "Database status is not OPEN, but $ORACLE_STATUS. Cannot access the necessary views, this sub is skipped.\n";
+    return(1)
+  }
 
   # see also:
   # 2010-01-11 Infos about BUFFER CACHEs.txt
@@ -2910,7 +3483,7 @@ sub get_objects_in_buffer {
 
     my $txt = make_text_report(\@TXT, $DELIM, $colalign, 1);
 
-    # must match $ts in "sub buffer_cache()"
+    # must match $ts in 'sub buffer_cache()'
     uls_value("buffer cache:$buffer_name", "objects", $txt, "_");
   }
 
@@ -2936,8 +3509,14 @@ sub objects_in_buffer_cache {
   # The KEEP and RECYCLE buffer caches are always set up with the
   # default block size.
 
+  # TODO: Check if that needs to be changed for non-cdb environments.
 
-  title("Objects in Buffer Cache");
+  title(sub_name());
+
+  if ($ORACLE_STATUS !~ /OPEN/) {
+    print "Database status is not OPEN, but $ORACLE_STATUS. Cannot access the necessary views, this sub is skipped.\n";
+    return(1)
+  }
 
   # -----
   # Find the used buffers, like 'DEFAULT (16k)', 'DEFAULT (8k)' or 'KEEP (8k)'
@@ -2985,7 +3564,9 @@ sub objects_in_buffer_cache {
 # ===================================================================
 sub latches {
 
-  title("Latches");
+  # TODO: Check if that needs to be changed for non-cdb environments.
+
+  title(sub_name());
 
   my $ts = "latches";
 
@@ -3029,6 +3610,9 @@ sub latches {
 
 # ===================================================================
 sub open_cursors {
+
+  # TODO: Check if that needs to be changed for non-cdb environments.
+
   title(sub_name());
 
   my $ts = "cursors:open cursors";
@@ -3079,6 +3663,9 @@ sub open_cursors {
 
 # ===================================================================
 sub session_cached_cursors {
+
+  # TODO: Check if that needs to be changed for non-cdb environments.
+
   title(sub_name());
 
   my $ts = "cursors:session cached cursors";
@@ -3142,7 +3729,15 @@ sub session_cached_cursors {
 
 # -------------------------------------------------------------------
 sub scheduler {
+
+  # TODO: Check if that needs to be changed for non-cdb environments.
+
   title(sub_name());
+
+  if ($ORACLE_STATUS !~ /OPEN/) {
+    print "Database status is not OPEN, but $ORACLE_STATUS. Cannot access the necessary views, this sub is skipped.\n";
+    return(1)
+  }
 
   my $ts = "scheduler";
 
@@ -3215,18 +3810,27 @@ sub scheduler {
 
 # -------------------------------------------------------------------
 sub scheduler_details {
+
+  # TODO: Check if that needs to be changed for non-cdb environments.
+
   title(sub_name());
 
   if ($ORACLE_MAJOR_VERSION < 10) {return}
 
+  if ($ORACLE_STATUS !~ /OPEN/) {
+    print "Database status is not OPEN, but $ORACLE_STATUS. Cannot access the necessary views, this sub is skipped.\n";
+    return(1)
+  }
+
   my $sql = "";
   my $ts = "scheduler";
 
-  # That's the file where the values are stored until the next run.
-  my $workfile = "$WORKFILEPREFIX.scheduler";
+  my $last_dt_param = "last_datetime";
+  if ( $CURRENT_PDB ) { $last_dt_param = "last_datetime_$CURRENT_PDB" }
 
   # Read the datetime of last processing from workfile.
-  my $last_dt = trim(get_value($workfile, $DELIM, "last_datetime", 2));
+  my $last_dt = $WORKFILE->val(sub_name(), $last_dt_param, "");
+
   if ($last_dt !~ /\d{4}/) {
     # When there are no digits in $last_dt => start 24h in the past
     $last_dt = iso_datetime(time - 24*60*60);
@@ -3286,6 +3890,11 @@ sub scheduler_details {
         $st = uc($st);
 
         my $tstep = "$ts:" . lc($jn);
+        # Remove last digits
+        $tstep =~ s/\d+$//;
+        # and remove last underscore
+        $tstep =~ s/_$//;
+
         uls_value($tstep, "job name", $jn, "[ ]", $sd);
         uls_value($tstep, "owner", $ow, "[ ]", $sd);
         uls_value($tstep, "status", $st, "[ ]", $sd);
@@ -3309,13 +3918,7 @@ sub scheduler_details {
 
   # -----
   # Put the current timestamp of this SQL request into temporary file
-
-  # last_datetime!2015-02-24 19:18:21!
-  print "last_datetime${DELIM}${curr_dt}${DELIM}\n";
-  write2file($TMPOUT1, "last_datetime${DELIM}${curr_dt}${DELIM}\n");
-
-  # Build the value file with the current timestamp used in the above SQL
-  make_value_file($TMPOUT1, $workfile, $WORKFILE_TIMESTAMP, $DELIM, 1);
+  set_value(\$WORKFILE, sub_name(), $last_dt_param, $curr_dt);
 
   send_doc($ts);
 
@@ -3325,10 +3928,17 @@ sub scheduler_details {
 # -------------------------------------------------------------------
 sub jobs {
 
+  # TODO: Check if that needs to be changed for non-cdb environments.
+
   # "jobs" are nearly obsolete, since one would use the "scheduler" now.
   # DBMS_JOB ist still supported for backward compatability at least in Oracle 12.1.
 
   title(sub_name());
+
+  if ($ORACLE_STATUS !~ /OPEN/) {
+    print "Database status is not OPEN, but $ORACLE_STATUS. Cannot access the necessary views, this sub is skipped.\n";
+    return(1)
+  }
 
   my $ts = "jobs";
 
@@ -3546,10 +4156,18 @@ sub fast_recovery_area {
 
 # -------------------------------------------------------------------
 sub audit_information {
+
+  # TODO: Check if that needs to be changed for non-cdb environments.
+
   # if ($ORACLE_VERSION !~ /^1\d/) { return(1) }
   if ($ORACLE_MAJOR_VERSION < 10) {return(1) }
 
   title(sub_name());
+
+  if ($ORACLE_STATUS !~ /OPEN/) {
+    print "Database status is not OPEN, but $ORACLE_STATUS. Cannot access the necessary views, this sub is skipped.\n";
+    return(1)
+  }
 
   my $ts = "audit information";
 
@@ -3575,9 +4193,10 @@ sub audit_information {
     return(0);
   }
 
-  my $workfile = "$WORKFILEPREFIX.audit_information";
+  my $wf_param = "last_datetime";
+  if ( $CURRENT_PDB ) { $wf_param = "last_datetime_$CURRENT_PDB"; }
 
-  my $last_dt = get_value($workfile, $DELIM, "last_datetime");
+  my $last_dt = $WORKFILE->val(sub_name(), $wf_param, "");
 
   if ($last_dt !~ /\d{4}/) {
     # When there are no digits in $last_dt => start now
@@ -3716,24 +4335,25 @@ sub audit_information {
 
   # -----
   # Put the current timestamp of this SQL request into temporary file
-
-  # last_datetime!2013-03-24 10:23:44!
-  print "last_datetime${DELIM}${curr_dt}${DELIM}\n";
-  # print CURRENT "last_datetime${DELIM}${curr_dt}${DELIM}\n";
-  write2file($TMPOUT1, "last_datetime${DELIM}${curr_dt}${DELIM}\n");
-
-  # Build the value file with the current timestamp used in the above SQL
-  make_value_file($TMPOUT1, $workfile, $WORKFILE_TIMESTAMP, $DELIM, 1);
+  set_value(\$WORKFILE, sub_name(), $wf_param, $curr_dt);
 
 } # audit_information
 
 
 # -------------------------------------------------------------------
 sub unified_audit_information {
+
+  # TODO: Check if that needs to be changed for non-cdb environments.
+
   # if ($ORACLE_VERSION !~ /^1\d/) { return(1) }
   if ($ORACLE_MAJOR_VERSION < 12) {return(1) }
 
   title(sub_name());
+
+  if ($ORACLE_STATUS !~ /OPEN/) {
+    print "Database status is not OPEN, but $ORACLE_STATUS. Cannot access the necessary views, this sub is skipped.\n";
+    return(1)
+  }
 
   my $ts = "unified audit information";
 
@@ -3778,9 +4398,10 @@ sub unified_audit_information {
     return(0);
   }
 
-  my $workfile = "$WORKFILEPREFIX.unified_audit_information";
+  my $wf_param = "last_datetime";
+  if ( $CURRENT_PDB ) { $wf_param = "last_datetime_$CURRENT_PDB" }
 
-  my $last_dt = get_value($workfile, $DELIM, "last_datetime");
+  my $last_dt = $WORKFILE->val(sub_name(), $wf_param, "");
 
   if ($last_dt !~ /\d{4}/) {
     # When there are no digits in $last_dt => start now
@@ -3909,14 +4530,7 @@ sub unified_audit_information {
 
   # -----
   # Put the current timestamp of this SQL request into temporary file
-
-  # last_datetime!2018-03-12 13:16:04!
-  print "last_datetime${DELIM}${curr_dt}${DELIM}\n";
-  # print CURRENT "last_datetime${DELIM}${curr_dt}${DELIM}\n";
-  write2file($TMPOUT1, "last_datetime${DELIM}${curr_dt}${DELIM}\n");
-
-  # Build the value file with the current timestamp used in the above SQL
-  make_value_file($TMPOUT1, $workfile, $WORKFILE_TIMESTAMP, $DELIM, 1);
+  set_value(\$WORKFILE, sub_name(), $wf_param, $curr_dt);
 
 } # unified_audit_information
 
@@ -3924,6 +4538,8 @@ sub unified_audit_information {
 
 # -------------------------------------------------------------------
 sub flashback {
+
+  # TODO: Check if that needs to be changed for non-cdb environments.
 
   # Not available before Oracle 10
   # if ($ORACLE_VERSION !~ /^1\d/) { return(1) }
@@ -4039,6 +4655,15 @@ sub flashback {
 sub undo_usage {
   # undo_usage(<teststep>, <tablespace_name>)
 
+  # TODO: Check if that needs to be changed for non-cdb environments.
+
+  title(sub_name());
+
+  if ($ORACLE_STATUS !~ /OPEN/) {
+    print "Database status is not OPEN, but $ORACLE_STATUS. Cannot access the necessary views, this sub is skipped.\n";
+    return(1)
+  }
+
   my ($tstep, $tspace) = @_;
 
   # http://blog.mydream.com.hk/howto/how-to-determine-undo-usage-in-oracle
@@ -4148,7 +4773,14 @@ sub undo_usage {
 sub schema_information {
   # schema_information()
 
+  # TODO: Check if that needs to be changed for non-cdb environments.
+
   title(sub_name());
+
+  if ($ORACLE_STATUS !~ /OPEN/) {
+    print "Database status is not OPEN, but $ORACLE_STATUS. Cannot access the necessary views, this sub is skipped.\n";
+    return(1)
+  }
 
   my $tstep = "schema information";
 
@@ -4213,7 +4845,14 @@ sub schema_information {
 sub admin_db_user {
   # admin_db_user()
 
+  # TODO: Check if that needs to be changed for non-cdb environments.
+
   title(sub_name());
+
+  if ($ORACLE_STATUS !~ /OPEN/) {
+    print "Database status is not OPEN, but $ORACLE_STATUS. Cannot access the necessary views, this sub is skipped.\n";
+    return(1)
+  }
 
   my $tstep = "administrative database user";
   # ignoring the oracle maintained users
@@ -4317,6 +4956,8 @@ sub tnsping {
   # and check the output for TNS- error messages.
   # Send only to ULS if an error occurs.
 
+  # This is not for PDBs, only for Non-CDBs or the CDB.
+
   title(sub_name());
 
   my $tstep = "tnsping";
@@ -4352,8 +4993,547 @@ sub tnsping {
 
 } # tnsping
 
+# -------------------------------------------------------------------
+sub pdb_service_test {
+  # pdb_service_test();
+  #
+  # Execute a
+  # tnsping <ip>:<port>/<pdb_service_name>
+  # and check the output for TNS- error messages.
+  # Send only to ULS if an error occurs.
+
+  # This is only for PDBs
+
+  title(sub_name());
+
+  my $tstep = "pdb service test";
+  my $xval;
+
+  # my $cmd = "tnsping " . $ENV{"ORACLE_SID"};
+  my $cmd = "lsnrctl status listener_" . $ENV{"ORACLE_SID"};
+
+  my $out = `$cmd`;
+
+  $xval = $?;
+  if ($xval == -1) {
+    # <cmd> may not be available
+    output_error_message(sub_name() . ": ERROR: failed to execute command '$cmd', exit value is: $xval: $!");
+    return(undef);
+
+  } elsif ($xval & 127) {
+    my $died_with = $xval & 127;
+    my $coredump = ($? & 128) ? 'yes' : 'no';
+    output_error_message(sub_name() . ": ERROR: child died with signal $died_with, coredump: $coredump");
+    return(undef);
+
+  } elsif ($xval != 0) {
+    # Command was executed correctly, but has TNS- errors.
+    # The exit value is 1.
+
+    output_error_message(sub_name() . ": ERROR: failed to execute command '$cmd', exit value is: $xval: $!");
+
+  } else {
+    # OK, proper execution
+    print "Command '$cmd' exited successful with value ", $xval >> 8, "\n";
+    # Do not send anything to ULS if successful.
+  }
+
+  # print "$out\n";
+
+  # (DESCRIPTION=(ADDRESS=(PROTOCOL=tcp)(HOST=10.61.52.57)(PORT=6543)))
+  # -----
+  # Get ip address
+
+  $out =~ /\(HOST\s*=\s*(\S+?)\s*\)\s*\(PORT\s*=\s*(\S+?)\s*\)/;
+  my $host = $1;
+  # For testing the name resolution only:
+  # my $host = "legb2td001";
+  my $port = $2;
+  my $ip = $host;
+
+  # print "host=$host, port=$port\n";
+
+  if ($host =~ /\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/) {
+    # It is already an ip address
+  } else {
+    # getent hosts <hostname>
+    # 10.61.52.56     legb2td001.dpaorinp.de legb2td001
+
+    my $getent = `getent hosts $host`;
+    chomp($getent);
+    # print "getent=$getent\n";
+
+    ($ip) = split(/\s/, $getent);
+  }
+
+  print "ip=$ip, port=$port\n";
+
+  # -----
+  $cmd = "tnsping $ip:$port/$CURRENT_PDB";
+
+  $out = `$cmd`;
+  $xval = $?;
+  if ($xval == -1) {
+    # <cmd> may not be available
+    output_error_message(sub_name() . ": ERROR: failed to execute command '$cmd', exit value is: $xval: $!");
+    return(undef);
+
+  } elsif ($xval & 127) {
+    my $died_with = $xval & 127;
+    my $coredump = ($? & 128) ? 'yes' : 'no';
+    output_error_message(sub_name() . ": ERROR: child died with signal $died_with, coredump: $coredump");
+    return(undef);
+
+  } elsif ($xval != 0) {
+    # Command was executed correctly, but has TNS- errors.
+    # The exit value is 1.
+
+    # output_error_message(sub_name() . ": ERROR: failed to execute command '$cmd', exit value is: $xval: $!");
+    uls_value($tstep, "output", "\$ $cmd\n$out", "_");
+
+  } else {
+    # OK, proper execution
+    print "Command '$cmd' exited successful with value ", $xval >> 8, "\n";
+    # Do not send anything to ULS if successful.
+  }
+
+  send_doc($tstep);
+
+  return(1);
+
+} # pdb_service_test
+
 
 # -------------------------------------------------------------------
+sub dataguard {
+
+  # TODO: Check if that needs to be changed for non-cdb environments.
+  #       Or check other replications similar to dataguard.
+
+  # if ($ORACLE_VERSION !~ /^1\d/) { return(1) }
+  if ($ORACLE_MAJOR_VERSION < 12) {return(1) }
+
+  title(sub_name());
+
+  my $ts = "data guard";
+
+  my $sql = "";
+
+  # -----
+  # Check if dataguard is active
+
+  $sql = " select 'dataguard_active', count(*) from v\$DATAGUARD_CONFIG; ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  my $dg_active = trim(get_value($TMPOUT1, $DELIM, 'dataguard_active'));
+  print "dataguard_active=$dg_active\n";
+
+  if (! $dg_active) {
+    print "Data Guard is not activated!\n";
+    if ($ONCE_A_DAY) {
+      uls_value("Info", "dataguard role", $DG_ROLE, "[ ]");
+    }
+    return(0);
+    # DG_ROLE is "NONE"
+  }
+
+  # -----
+  # Data Guard is configured when arriving here.
+
+  $sql = "
+    variable dbun VARCHAR2(30)
+    exec :dbun := 'DB_UNIQUE_NAME'
+
+    select 'dest_role', dest_role, parent_dbun 
+    from v\$DATAGUARD_CONFIG 
+    where DB_UNIQUE_NAME = (select value from v\$parameter where upper(name) = :dbun)
+    ; 
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  $DG_ROLE = trim(get_value($TMPOUT1, $DELIM, 'dest_role', 2));
+  my $parent_dbun = trim(get_value($TMPOUT1, $DELIM, 'dest_role', 3));
+
+  print "DG_ROLE=$DG_ROLE\n";
+  print "Parent DB Unique Name=$parent_dbun\n";
+  # PRIMARY DATABASE
+  # PHYSICAL STANDBY
+  # FAR SYNC
+  # ...
+
+  if ($ONCE_A_DAY) {
+    uls_value("Info", "dataguard role", $DG_ROLE, "[ ]");
+
+    uls_value($ts, "dataguard role", $DG_ROLE, "[ ]");
+    uls_value($ts, "parent db_unique_name", $parent_dbun, "[ ]");
+  }
+
+  # -----
+
+  if ($DG_ROLE eq "PHYSICAL STANDBY" ) {
+    # -----
+    # PHYSICAL STANDBY
+
+    $sql = "
+         variable tlag VARCHAR2(30)
+         variable alag VARCHAR2(30)
+
+         exec :tlag := 'transport lag'
+         exec :alag := 'apply lag'
+
+         select name, 
+                extract(day    from TO_DSINTERVAL(value)) * 24 * 60 * 60 + 
+                extract(hour   from TO_DSINTERVAL(value)) * 24 * 60 + 
+                extract(minute from TO_DSINTERVAL(value)) * 60 + 
+                extract(second from TO_DSINTERVAL(value)),
+                (sysdate - to_date(TIME_COMPUTED, 'mm/dd/yyyy HH24:MI:SS')) * 24 * 60 * 60
+         from V\$DATAGUARD_STATS
+         where NAME in (:tlag, :alag)
+         ;
+    ";
+
+    if (! do_sql($sql)) {return(0)}
+
+    my $transport_lag  = trim(get_value($TMPOUT1, $DELIM, 'transport lag'));
+    my $transport_lag_tc  = trim(get_value($TMPOUT1, $DELIM, 'transport lag', 2));
+
+    print "Transport lag=$transport_lag s, transport lag compute before=$transport_lag_tc s\n";
+
+    my $apply_lag  = trim(get_value($TMPOUT1, $DELIM, 'apply lag'));
+    my $apply_lag_tc  = trim(get_value($TMPOUT1, $DELIM, 'apply lag', 2));
+
+    print "Apply lag=$apply_lag s, apply lag compute before=$apply_lag_tc s\n";
+
+    uls_value($ts, "transport lag", $transport_lag, "s");
+    uls_value($ts, "transport lag computed before", $transport_lag_tc, "s");
+
+    uls_value($ts, "apply lag", $apply_lag, "s");
+    uls_value($ts, "apply lag computed before", $apply_lag_tc, "s");
+
+  } elsif ($DG_ROLE eq "PRIMARY DATABASE" ) {
+    # -----
+    # PRIMARY DATABASE
+
+    print "$DG_ROLE has no transport or apply lag.\n";
+
+  } else {
+    # -----
+    # anything else
+
+    print "WARNING: Data Guard role '$DG_ROLE' is not supported!\n";
+  }
+
+  send_doc($ts);
+
+} # dataguard
+
+
+# -------------------------------------------------------------------
+sub auto_optimizer_stats_collection {
+
+  # Should work for non-cdb, cdb and pdbs.
+
+  if ($ORACLE_MAJOR_VERSION < 12) {return(0) }
+
+  title(sub_name());
+
+  if ($ORACLE_STATUS !~ /OPEN/) {
+    print "Database status is not OPEN, but $ORACLE_STATUS. Cannot access the necessary views, this sub is skipped.\n";
+    return(1)
+  }
+
+  my $ts = "auto optimizer stats collection";
+
+  my $sql = "";
+
+  # -----
+  # Check if auto optimizer stats collection is active
+
+  $sql = "
+    variable cliname varchar2(256)
+    exec :cliname := 'auto optimizer stats collection'
+
+    SELECT 'status', STATUS FROM DBA_AUTOTASK_CLIENT
+    WHERE CLIENT_NAME = :cliname
+    ;
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  my $status = trim(get_value($TMPOUT1, $DELIM, 'status'));
+
+  if ($status !~ /enabled/i) {
+    print "'auto optimizer stats collection' is not activated!\n";
+    return(0);
+  }
+
+  # -----
+  my $wf_param = "last_datetime";
+  if ( $CURRENT_PDB ) { $wf_param = "last_datetime_$CURRENT_PDB" }
+
+  my $last_dt = $WORKFILE->val(sub_name(), $wf_param, "");
+
+  if ($last_dt !~ /\d{4}/) {
+    # When there are no digits in $last_dt => start now
+    $last_dt = iso_datetime(time - 120*24*60*60);
+    print "First run for '$ts' ever.\n";
+  }
+  print "last processed datetime=$last_dt.\n";
+
+  # Now
+  my $curr_dt = iso_datetime();
+
+  # -----
+  # Get the job executions since last run of this script
+
+  $sql = "
+        variable lastdt varchar2(20)
+        exec :lastdt := '$last_dt'
+
+        variable currdt varchar2(20)
+        exec :currdt := '$curr_dt'
+
+        variable cliname varchar2(256)
+        exec :cliname := 'auto optimizer stats collection'
+
+    select window_name
+    , to_char(window_start_time, 'yyyy-mm-dd HH24:MI:SS')
+    , to_char(window_start_time + window_duration, 'yyyy-mm-dd HH24:MI:SS')
+    , job_status
+    , to_char(job_start_time, 'yyyy-mm-dd HH24:MI:SS') job_start_time
+    , extract(day    from TO_DSINTERVAL(job_duration)) * 24 * 60 * 60 +
+      extract(hour   from TO_DSINTERVAL(job_duration)) * 24 * 60 +
+      extract(minute from TO_DSINTERVAL(job_duration)) * 60 +
+      extract(second from TO_DSINTERVAL(job_duration)) JOB_DURATION
+    , job_error
+    , replace(job_info, 'ORA-', 'ORA - ')
+    from dba_autotask_job_history
+    where job_start_time >  to_date(:lastdt, 'yyyy-mm-dd HH24:MI:SS')
+      and job_start_time <= to_date(:currdt, 'yyyy-mm-dd HH24:MI:SS')
+    and client_name = :cliname
+    ;
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  my @R;
+  get_value_lines(\@R, $TMPOUT1);
+
+  foreach my $r (@R) {
+    my @E = split($DELIM, $r);
+    @E = map(trim($_), @E);
+
+    # window_name | job_status | job_start_time | job_duration [s] | job_error | job_info
+
+    my ($window_name, $window_start_time, $window_stop_time, $job_status, $job_start_time, $job_duration, $job_error, $job_info) = @E;
+
+    uls_value($ts, "maintenance window", $window_name, "[ ]", $job_start_time);
+
+    # uls_value($ts, "window start time", $window_start_time, "{DT}", $job_start_time);
+    # uls_value($ts, "window stop time", $window_stop_time, "{DT}", $job_start_time);
+    uls_timing({teststep => $ts, detail => "maintenance window start-stop", start => $window_start_time, timestamp => $job_start_time});
+    uls_timing({teststep => $ts, detail => "maintenance window start-stop", stop  => $window_stop_time, timestamp => $job_start_time});
+
+    uls_value($ts, "job status", $job_status, "[ ]", $job_start_time);
+    uls_value($ts, "job duration", $job_duration, "s", $job_start_time);
+    if ( $job_error != 0 ) {
+      uls_value($ts, "job error", $job_error, "#", $job_error);
+    }
+    if ( $job_info ) {
+      uls_value($ts, "job info", $job_info, "[ ]", $job_start_time);
+    }
+
+  } # foreach
+
+  send_doc($ts);
+
+  # -----
+  # Put the current timestamp of this SQL request into temporary file
+  set_value(\$WORKFILE, sub_name(), $wf_param, $curr_dt);
+
+} # auto_optimizer_stats_collection
+
+
+
+# -------------------------------------------------------------------
+sub blocked_objects {
+  # Find blocked objects (only if blocked sessions are found)
+
+  # TODO: Check if that needs to be changed for non-cdb environments.
+
+  title(sub_name());
+
+  if ($ORACLE_STATUS !~ /OPEN/) {
+    print "Database status is not OPEN, but $ORACLE_STATUS. Cannot access the necessary views, this sub is skipped.\n";
+    return(1)
+  }
+
+  my ($ts) = @_;
+
+  my $sql = "";
+
+  # -----
+
+  $sql = "
+    SELECT a.session_id, 
+       a.oracle_username, 
+       a.os_user_name, 
+       b.owner, 
+       b.object_name, 
+       b.object_type, 
+       DECODE(a.locked_mode, 0, '0 - NONE: lock requested but not yet obtained', 
+                             1, '1 - NULL', 
+                             2, '2 - ROWS_S (SS): Row Share Lock', 
+                             3, '3 - ROW_X (SX): Row Exclusive Table Lock', 
+                             4, '4 - SHARE (S): Share Table Lock', 
+                             5, '5 - S/ROW-X (SSX): Share Row Exclusive Table Lock', 
+                             6, '6 - Exclusive (X): Exclusive Table Lock') LOCKED_MODE
+    FROM   v\$locked_object a, dba_objects b 
+    WHERE  a.object_id = b.object_id
+    ;
+    ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  # Keeps the returned lines
+  my @R;
+
+  # Default text if no no blocked objects are found.
+  my $txt = "no blocked objects found";
+
+  # Place all result lines into @R
+  if ( get_value_lines(\@R, $TMPOUT1) ) {
+
+    # session_id dbusername osusername owner object_name object_type lock_mode 
+    unshift(@R, "SESSION_ID $DELIM DB USER $DELIM OS USER $DELIM OBJECT_OWNER $DELIM OBJECT_NAME $DELIM OBJECT_TYPE $DELIM LOCKED_MODE");
+
+    $txt = make_text_report(\@R, $DELIM, "LLLLLLL", 1);
+  }
+
+  # The resulting text report may be too long for a simple text value.
+  #
+  # uls_value($ts, "administrative database user report", $txt, "_");
+  #
+  # So use a file instead:
+  my $reportfile = "${WORKFILEPREFIX}.blocked_objects_report";
+
+  if (write2file($reportfile, $txt) ) {
+    my $appended_ext = try_to_compress($reportfile);
+    
+    uls_file({
+      teststep  => "$ts"
+     ,detail    => "blocked objects report"
+     ,filename  => "$reportfile$appended_ext"
+     ,rename_to => "blocked_objects_report.txt$appended_ext"
+    });
+  }
+
+} # blocked_objects
+
+
+# -------------------------------------------------------------------
+sub blocking_sessions {
+  # Check for blocking sessions.
+
+  # TODO: Check if that needs to be changed for non-cdb environments.
+
+  # if ($ORACLE_MAJOR_VERSION < 12) {return(0) }
+
+  title(sub_name());
+
+  if ($ORACLE_STATUS !~ /OPEN/) {
+    print "Database status is not OPEN, but $ORACLE_STATUS. Cannot access the necessary views, this sub is skipped.\n";
+    return(1)
+  }
+
+  my $ts = "blocking sessions";
+
+  my $sql = "";
+
+  # -----
+  # As alternative, you may use a sql similar to:
+  # 
+  # SELECT s1.username || '@' || s1.machine
+  #     || ' ( SID,SERIAL# =' || s1.sid || ',' s1.serial# || ' )  is blocking '
+  #     || s2.username || '@' || s2.machine 
+  #     || ' ( SID=' || s2.sid || ' ) ' AS blocking_status
+  #     FROM v$lock l1, v$session s1, v$lock l2, v$session s2
+  #     WHERE s1.sid=l1.sid AND s2.sid=l2.sid
+  #     AND l1.BLOCK=1 AND l2.request > 0
+  #     AND l1.id1 = l2.id1
+  #     AND l1.id2 = l2.id2;
+  #
+  # but that sql lists ALL blocked sessions, which might be a longer list.
+
+  # -----
+  # This sql finds the final blocker of all sessions at the top of the wait chain. 
+  # This is the session/process that maybe (most probably be) causing the problem.
+  #
+  # So that will return only one session as result.
+
+
+  $sql = "
+    variable p1 varchar2(10)
+    exec :p1 := 'count'
+
+    variable p2 varchar2(20)
+    exec :p2 := 'blocking_session'
+
+    variable zero0 number
+    exec :zero0 := 0
+
+    variable fbss varchar2(20)
+    exec :fbss := 'VALID'
+
+    select :p1, count(*)
+    from v\$lock l1, v\$session s1, v\$lock l2, v\$session s2
+    where s1.sid=l1.sid and s2.sid=l2.sid
+      and l1.BLOCK=1 and l2.request > :zero0
+      and l1.id1 = l2.id1
+      and l2.id2 = l2.id2;
+
+    select :p2, username, osuser, machine, sid, serial#
+    from v\$session
+    where sid in (
+      select distinct final_blocking_session
+      from v\$session where final_blocking_session_status = :fbss
+    )
+    ;
+
+  ";
+
+  if (! do_sql($sql)) {return(0)}
+
+  # Number of blocked sessions
+  my $blocked_count = trim(get_value($TMPOUT1, $DELIM, 'count'));
+
+  # Session that is currently blocking one or many other sessions
+  my $dbusername = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 2));
+  my $osuser     = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 3));
+  my $machine    = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 4));
+  my $sid        = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 5));
+  my $serial     = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 6));
+
+  if ($blocked_count) {
+
+    uls_value($ts, "count", $blocked_count, '#');
+
+    # Perhaps, you may not want to include the username/osuser
+    # uls_value($ts, "blocking session", "OSUSER:${osuser} / MACHINE:${machine} / DBUSER:$dbusername / SID,SERIAL#:$sid,$serial", '[ ]');
+    uls_value($ts, "blocking session", "${osuser} @ ${machine} / $dbusername / SID,SERIAL#: $sid,$serial", '[ ]');
+
+    # blocked_objects($ts);
+
+  } else {
+    print "No blocking sessions found.\n";
+    # uls_value($ts, "count", 0, '#');
+  }
+
+  send_doc($ts);
+
+} # blocking_sessions
 
 
 # ===================================================================
@@ -4394,7 +5574,8 @@ print "$CURRPROG is started in directory $currdir\n";
 my $cfgfile = $ARGV[0];
 print "configuration file=$cfgfile\n";
 
-my @Sections = ( "GENERAL", "ORACLE", "ULS", "WATCH_ORACLE" );
+# my @Sections = ( "GENERAL", "ORACLE", "ULS", "WATCH_ORACLE", "WATCH_ORACLE_PDBS");
+my @Sections = ( "GENERAL", "ORACLE", "ULS", "WATCH_ORACLE");
 print "Reading sections: ", join(",", @Sections), " from configuration file\n";
 
 if (! get_config2($cfgfile, \%CFG, @Sections)) {
@@ -4561,12 +5742,33 @@ $d =~ s/\d{1}$/0/;
 
 set_uls_timestamp($d);
 
+# The section will be dynamically changed for PDBs
+# (if any are present)
+my $uls_section = "";
+
 # uls_show();
 
 # -------------------------------------------------------------------
 # The real work starts here.
 # ------------------------------------------------------------
 
+
+# A config:ini file:
+my $f = "${WORKFILEPREFIX}.runtime_values";
+print "File for runtime values: $f\n";
+
+$WORKFILE->SetFileName($f);
+
+if (-r $f ) {
+  $WORKFILE->ReadConfig();
+  set_value(\$WORKFILE, "GENERAL", "last_run_startet", iso_datetime($start_secs));
+} else {
+  # Set LAST_RUN to an initial value.
+  #                          [section]   parameter  value
+  set_value(\$WORKFILE, "GENERAL", "initialized", iso_datetime($start_secs));
+}
+
+# -----
 # Define some temporary file names
 $TMPOUT1 = "${WORKFILEPREFIX}_1.tmp";
 print "TMPOUT1=$TMPOUT1\n";
@@ -4620,8 +5822,11 @@ if (! general_info()) {
   clean_up($TMPOUT1, $LOCKFILE);
 
   send_runtime($start_secs);
-  # uls_timing($IDENTIFIER, "start-stop", "stop");
+
   uls_flush(\%ULS);
+
+  set_value(\$WORKFILE, "GENERAL", "last_run_finished", iso_datetime(time));
+  $WORKFILE->RewriteConfig();
 
   exit(1);
 }
@@ -4636,6 +5841,11 @@ tablespace_usage();
 
 # ----- sessions and processes -----
 sessions_processes();
+
+# ----- grouped connections -----
+if ($OPTIONS =~ /GROUPED_CONNECTIONS,/) {
+  grouped_connections();
+}
 
 # ----- rollback segment summary -----
 if ($OPTIONS =~ /ROLLBACK,/) {
@@ -4733,6 +5943,13 @@ fast_recovery_area();
 # Will deliver values only if flashback is enabled.
 flashback();
 
+# ----- dataguard -----
+#  Will deliver values only if dataguard is configured
+dataguard();
+
+# ----- execution of 'auto optimizer stats collection' -----
+auto_optimizer_stats_collection();
+
 
 # ----- audit information -----
 
@@ -4754,11 +5971,195 @@ if ($OPTIONS =~ /TNSPING,/) {
   tnsping();
 }
 
+# ----- blocking sessions -----
+# Check for blocking sessions
 
+blocking_sessions();
+
+
+# ==================================================================
+# CDB/PDB
+
+if ($#PDB_LIST >= 0) {
+  # Remember: $#ARRAY returns the max index of the array, which starts at zero!
+
+  print "List of PDBs and CON_IDs: ", join(",", @PDB_LIST), "\n";
+
+  # Set the $options string
+  # for watch_oracle_pdbs
+
+  # $OPTIONS = "";
+  #
+  # if ($CFG{"WATCH_ORACLE_PDBS.OPTIONS"}) {
+  #   my @O = split(",", $CFG{"WATCH_ORACLE_PDBS.OPTIONS"});
+  #   @O = map(trim($_), @O);
+  #   # Add a comma to each expression for exact matching
+  #   $OPTIONS = join(",", @O) . ",";
+  #   print "OPTIONS=$OPTIONS\n";
+  # }
+
+  # -----
+  # Keep that, add pdb name for each pdb in loop below
+  my $base_WORKFILEPREFIX = $WORKFILEPREFIX;
+
+  foreach my $p (@PDB_LIST ) {
+    # pdb_name|con_id
+
+    ($CURRENT_PDB, $CURRENT_CON_ID) = split('\|', $p);
+    print "p=$p, CURRENT_PDB=$CURRENT_PDB, CURRENT_CON_ID=$CURRENT_CON_ID\n";
+
+    my $pdb_lc = lc($CURRENT_PDB);
+
+    $uls_section = $CFG{"ULS.ULS_SECTION_PDB"} ;
+    # ULS_SECTION_PDB = Oracle DB [%%ORACLE_SID%% -> __PDB_NAME__]
+    # vi /etc/uls/oracle/standard.conf
+
+    $uls_section =~ s/__PDB_NAME__/$pdb_lc/g;
+
+    print "Setting ULS_SECTION to: $uls_section\n";
+
+    set_uls_section($uls_section);
+
+    # -----
+    print "Checking pluggable database '$CURRENT_PDB'\n";
+
+    $WORKFILEPREFIX = $base_WORKFILEPREFIX . "_$pdb_lc";
+    print "WORKFILEPREFIX=$WORKFILEPREFIX\n";
+
+    $FAILED_LOGIN_REPORT = "${WORKFILEPREFIX}.failed_login_report";
+    print "FAILED_LOGIN_REPORT=$FAILED_LOGIN_REPORT\n";
+
+    $ADMIN_DBUSER_REPORT = "${WORKFILEPREFIX}.administrative_database_user_report";
+    print "ADMIN_DBUSER_REPORT=$ADMIN_DBUSER_REPORT\n";
+
+
+    general_pdb_info();
+
+    # ----- administrative database users -----
+    if ($ONCE_A_DAY) {
+      admin_db_user();
+    }
+
+    # ----- tablespace usage -----
+    tablespace_usage();
+
+    # ----- sessions and processes -----
+    sessions_processes_pdb();
+
+    # ----- grouped connections -----
+    if ($OPTIONS =~ /GROUPED_CONNECTIONS,/) {
+      grouped_connections();
+    }
+
+    # ----- system statistics -----
+    system_statistics();
+
+    # ----- consumed resources -----
+    consumed_resources();
+
+    # ----- shared pool -----
+    # the pdb part is retrieved in consumed_resources()
+    # shared_pool();
+
+    # ----- library caches -----
+    # This is not really relevant, so leave it out for now.
+    # library_caches();
+
+    # ----- dictionary cache -----
+    # This is not really relevant, so leave it out for now.
+    # dictionary_cache();
+
+    # ----- detailed dictionary cache analysis
+    # This is not really relevant, so leave it out for now.
+    # if ($OPTIONS =~ /DETAILED_DICTIONARY_CACHE,/) {
+    #   dictionary_cache_detailed();
+    # }
+
+    # ----- pga -----
+    # the pdb part is retrieved in consumed_resources()
+    # but there may be more information about pga that could be of interest.
+    # TODO
+    # pga();
+
+    # ----- cursors, session cached cursors
+    if ($OPTIONS =~ /CURSORS,/) {
+      open_cursors();
+      session_cached_cursors();
+    }
+
+    # ----- wait events -----
+    if ($OPTIONS =~ /WAIT_EVENTS,/) {
+      wait_events();
+    }
+
+    # ----- wait events classes -----
+    if ($OPTIONS =~ /WAIT_EVENT_CLASSES,/) {
+      wait_event_classes();
+    }
+    # ----- latches -----
+    if ($OPTIONS =~ /LATCHES,/) {
+      latches();
+    }
+
+    # ----- jobs -----
+    if ($OPTIONS =~ /JOBS,/) {
+      jobs();
+    }
+
+    # ----- scheduler details -----
+    if ($OPTIONS =~ /SCHEDULER,/) {
+      scheduler_details();
+    }
+
+    # ----- Check the service availability -----
+    if ($OPTIONS =~ /SERVICE_CHECK,/) {
+      pdb_service_test();
+    }
+
+    # ----- dataguard -----
+    #  Will deliver values only if dataguard is configured
+    # dataguard();
+
+    # ----- execution of 'auto optimizer stats collection' -----
+    auto_optimizer_stats_collection();
+
+
+    # ----- audit information -----
+    audit_information();
+    unified_audit_information();
+
+    # ----- schema information -----
+    if ($ONCE_A_DAY) {
+      if ($OPTIONS =~ /SCHEMA_INFO,/) {
+        schema_information();
+      }
+    }
+
+    # ----- blocking sessions -----
+    # Check for blocking sessions
+
+    blocking_sessions();
+
+    ## -----
+    ## Continue here with more pdb tests.
+
+  } # foreach pdb
+
+
+} # is_cdb, has pdbs
+
+
+## -----
 ## Continue here with more tests.
 
 # The real work ends here.
 # -------------------------------------------------------------------
+
+$uls_section = $CFG{"ULS.ULS_SECTION"} ;
+# ULS_SECTION_PDB = Oracle DB [%%ORACLE_SID%%]
+
+set_uls_section($uls_section);
+
 
 # Any errors will have sent already its error messages.
 uls_value($IDENTIFIER, "message", $MSG, " ");
@@ -4774,6 +6175,13 @@ uls_flush(\%ULS);
 # -------------------------------------------------------------------
 clean_up($TMPOUT1, $FAILED_LOGIN_REPORT, $LOCKFILE);
 
+# -----
+# Save runtime values
+
+set_value(\$WORKFILE, "GENERAL", "last_run_finished", iso_datetime(time));
+$WORKFILE->RewriteConfig();
+
+# -----
 title("END");
 
 if ($MSG eq "OK") {exit(0)}
@@ -4851,7 +6259,7 @@ runtime:
 # 
 
 
-Copyright 2004-2017, roveda
+Copyright 2004 - 2021, roveda
 
 The 'ULS Client for Oracle' is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -4894,6 +6302,29 @@ instance startup at:
 oracle version:
   is the version of this instance.
   select version from v$instance;
+
+#########################
+*Info PDB
+====
+
+pdb name:
+  Name of the PDB.
+
+cdb name:
+  Name of the CDB.
+
+open mode:
+  Should be 'READ WRITE' for normal operation.
+
+open time:
+  Is the ISO timestamp of when this pdb has been started.
+
+total size:
+  The total size of the pdb on disk in GB.
+
+block size:
+  The default block size of the pdb.
+
 
 #########################
 *Cursors
@@ -5272,6 +6703,9 @@ max processes:
 
   select name, value from v$parameter where name = 'processes';
 
+max processes since startup:
+  Maximum number of processes that have been used since instance startup.
+
 #########################
 *PGA
 ===
@@ -5436,6 +6870,12 @@ member status info:
 
 redo log switches:
   The number of redo log switches that have occurred since the last run.
+
+inactive redo log files
+  The number of inactive redo log files. If the number is zero, 
+  or near zero for a longer time this can be an indicator of performance 
+  problems indicated in AWR reports by 'waiting for free redo log'.
+  Add more online redo logs or change to a bigger size for each of them.
 
 
 #########################
@@ -5844,4 +7284,111 @@ select GRANTEE, GRANTED_ROLE, ADMIN_OPTION, DELEGATE_OPTION, DEFAULT_ROLE
   )
 where GRANTEE != 'DBA' and GRANTEE != 'SYS';
 
+###########################
+*auto optimizer stats collection
+===============================
+
+This is the full list of all executions of the job 'auto optimizer stats collection' and its final job status (mostly: SUCCEEDED or STOPPED). STOPPED means, that the duration of the maintenance window was not sufficient for the complete statistics collection.
+
+maintenance window:
+  The mainenance window when the job was started.
+
+window start time:
+  The start time of the maintenance window.
+
+window stop time:
+  The stop time of the maintenance window.
+
+job status:
+  The status of the job.
+
+job duration:
+  The duration (run time) of the job in seconds.
+
+job error:
+  Shows the error number of the job, only if the job did not succeed.
+
+job info:
+  Only present if the job status is not SUCCEEDED. 
+  It shows the reason for the unsuccessful termination of the job.
+ 
+###########################
+*blocking sessions
+=================
+
+Blocking sessions occur when one sessions holds an exclusive lock 
+on an object and doesn't release it before another sessions wants 
+to update the same data. 
+This will block the second (or more) session until the first one has done its work.
+
+From the view of the user it will look like the application 
+completely hangs while waiting for the first session to release its lock. 
+You'll often have to identify these sessions in order to improve 
+your application to avoid as many blocking sessions as possible.
+
+If necessary, you must kill the appropriate session by using command:
+
+  ALTER SYSTEM KILL SESSION 'sid,serial#' immediate;
+
+Replace 'sid' and 'serial#' by the values that you find in 'blocking session'.
+
+And you must probably check repetitively for further blocking sessions by using the command:
+
+  SELECT username, osuser, machine, sid, serial#  from v$session
+  where sid in (select distinct FINAL_BLOCKING_SESSION from v$session
+                where final_blocking_session_status = 'VALID');
+
+and kill those session likewise.
+
+
+count:
+  The number of blocked sessions.
+
+blocking session:
+  This is the session that causes the blocking of all 'count' sessions and which must be killed.
+  osusername @ machine / dbusername / SID,SERIAL#:sid,serial#
+
+
+#############################
+*pdb service test
+================
+
+This tests the availability of the listener service of a pdb.
+The 'lsnrctl status listener_$ORACLE_SID' is used to retrieve the
+ip address and the port of the listener, then a 'tnsping <ip>:<port>/<pdb_name>' is used to
+check the availability of the pdb service.
+
+If successful, nothing will be sent to ULS, only if an error or not connection to the
+pdb listener service is possible, an error will be reported.
+
+output:
+  The command and the output of the command that failed.
+
+
+#########################
+*consumed resources
+==================
+
+This averages the entries of the last 10 minutes of  V$RSRCMGRMETRIC_HISTORY which contains information about CPU utilization, memory usage and wait times even when no Resource Manager plan is set. All metrics belong to the specific pdb.
+
+avg iops:
+  I/O operations per second.
+
+avg iombps:
+  I/O megabytes per second
+
+cpu consumed time:
+  Consumed cpu time.
+
+SGA usage:
+  SGA memory usage.
+
+buffer cache usage:
+  Buffer cache memory usage.
+
+shared pool usage:
+  Shared pool memory usage.
+
+PGA usage:
+  PGA memory usage.
 

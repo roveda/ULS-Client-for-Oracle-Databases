@@ -7,6 +7,9 @@ There are change annotations in the CHANGES file of the Oracle OpTools
 for watch_oracle.pl which have not been relocated to this file.
 
 # -----
+2018-10-03, roveda
+  Removed obsolete calculation from sga() in watch_oracle.pl
+
 2018-02-14, roveda
   Changed all checks for successful sourcing the environment to 
   -z "$ORACLE_SID"

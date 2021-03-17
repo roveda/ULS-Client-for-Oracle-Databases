@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# watch_oracle.sh 
+# test_for_cdb.sh
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2020, roveda
+# Copyright 2020, roveda
 #
 # This file is part of the 'ULS Client for Oracle'.
 #
@@ -23,12 +23,12 @@
 #
 # ---------------------------------------------------------
 # Synopsis:
-#   watch_oracle.sh  <environment_script>  <configuration_file>
+#   test_for_cdb.sh  <environment_script>
 #
 # ---------------------------------------------------------
 # Description:
-#   This script starts the watch_oracle.pl by invoking perl 
-#   and passes through any additional arguments to it.
+#   This script checks the given Oracle database instance
+#   of the given environment if it is a cdb, if it has pdbs.
 #
 #   Send any hints, feature requests or bug reports to:
 #     roveda at universal-logging-system.org
@@ -42,6 +42,11 @@
 # ---------------------------------------------------------
 # Restrictions:
 #
+#   This script only works for Oracle 12+ database instances. 
+#   There was no column 'cdb' in older versions of v$database.
+#   The script does not check the version, so must disable its
+#   execution for older versions in the appropriate crontab file.
+#
 # ---------------------------------------------------------
 # Disclaimer:
 #   The script has been tested and appears to work as intended,
@@ -54,28 +59,14 @@
 # date            name        version
 # ----------      ----------  -------
 #
-# 2016-07-03      roveda      0.01
+# 2020-08-29      roveda      0.01
 #   Created
 #
-# 2017-01-09      roveda      0.02
-#   Renamed to watch_oracle.sh
-#
-# 2018-02-14      roveda      0.03
-#   Changed all checks for successful sourcing the environment to
-#   -z "$ORACLE_SID"
-#   instead of
-#   $? -ne 0 (what does not work)
-#
-# 2020-07-25      roveda      0.04
-#   Changed the hash bang
-#
-# 2020-08-30      roveda      0.05
-#   Added NLS_TIMESTAMP_FORMAT and NLS_TIMESTAMP_TZ_FORMAT.
 #
 # ===================================================================
 
 
-USAGE="watch_oracle.sh  <environment_script>  <configuration_file>"
+USAGE="test_for_cdb.sh  <environment_script> "
 
 unset LC_ALL
 export LANG=C
@@ -85,7 +76,8 @@ cd `dirname $0`
 # -----
 # Check number of arguments
 
-if [[ $# -ne 2 ]] ; then
+if [[ $# -ne 1 ]] ; then
+  echo "ERROR: You must specify the script to set the Oracle environment." >&2
   echo "$USAGE"
   exit 1
 fi
@@ -96,57 +88,36 @@ fi
 ORAENV="$1"
 
 if [[ ! -f "$ORAENV" ]] ; then
-  echo "Error: environment script '$ORAENV' not found => aborting script"
+  echo "Error: environment script '$ORAENV' not found => aborting script" >&2
+
   exit 2
 fi
 
 . "$ORAENV"
 
 if [[ -z "$ORACLE_SID" ]] ; then
-  echo 
-  echo "Error: the Oracle environment is not set up correctly => aborting script"
-  exit 2
-fi
-
-# -----
-# Check for configuration file
-
-CONFG="$2"
-
-if [[ ! -f "$CONFG" ]] ; then
   echo
-  echo "Error: standard configuration file '$CONFG' not found => aborting script"
+  echo "Error: the Oracle environment is not set up correctly => aborting script" >&2
+
   exit 2
 fi
 
 
 # -----
-# HOSTNAME is used, but normally not set in cronjobs
 
-HOSTNAME=`uname -n`
-export HOSTNAME
+is_cdb=$(echo $(sqlplus -s -l / as sysdba <<EOF
+  set echo off heading off feedback off
+  select cdb from v\$database;
+EOF
+))
 
-# Remember to include the directory where flush_test_values can
-# be found ('/usr/bin' or '/usr/local/bin') in the PATH.
+# YES/NO
 
+if [[ "$is_cdb" != "YES" ]] ; then
+  # NO it is not a CDB
+  exit 1
+fi
 
-# -----
-# Exit silently, if the TEST_BEFORE_RUN command does
-# not return the exit value 0.
-
-perl test_before_run.pl "$CONFG" > /dev/null 2>&1 || exit
-
-
-# -----
-# Call the script.
-
-# Set for decimal point, english messages and ISO date representation
-# (for this client connection only).
-# export NLS_LANG=AMERICAN_AMERICA.WE8ISO8859P1
-export NLS_LANG=AMERICAN_AMERICA.UTF8
-export NLS_DATE_FORMAT="YYYY-MM-DD hh24:mi:ss"
-export NLS_TIMESTAMP_FORMAT="YYYY-MM-DD HH24:MI:SS"
-export NLS_TIMESTAMP_TZ_FORMAT="YYYY-MM-DD HH24:MI:SS TZH:TZM"
-
-perl watch_oracle.pl "$CONFG"
+# YES it is a CDB
+exit 0
 
