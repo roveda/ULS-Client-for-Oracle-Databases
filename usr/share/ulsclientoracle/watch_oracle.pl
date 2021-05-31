@@ -489,6 +489,10 @@
 #   Changed 'blocking sessions' to deliver the final blocking session as simple expression
 #   and not as text report file.
 #
+# 2021-05-30      roveda      1.01
+#   Added NO_ALERT_LOG as possible option in the configuration file.
+#   Perhaps, the alert.log is checked by a foreign tool.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -508,7 +512,7 @@ use lib ".";
 use Misc 0.43;
 use Uls2 1.16;
 
-my $VERSION = 1.00;
+my $VERSION = 1.01;
 
 # ===================================================================
 # The "global" variables
@@ -5494,7 +5498,7 @@ sub blocking_sessions {
       and l1.id1 = l2.id1
       and l2.id2 = l2.id2;
 
-    select :p2, username, osuser, machine, sid, serial#
+    select :p2, username, osuser, machine, sid, serial#, program
     from v\$session
     where sid in (
       select distinct final_blocking_session
@@ -5515,6 +5519,7 @@ sub blocking_sessions {
   my $machine    = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 4));
   my $sid        = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 5));
   my $serial     = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 6));
+  my $progrm     = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 7));
 
   if ($blocked_count) {
 
@@ -5522,7 +5527,8 @@ sub blocking_sessions {
 
     # Perhaps, you may not want to include the username/osuser
     # uls_value($ts, "blocking session", "OSUSER:${osuser} / MACHINE:${machine} / DBUSER:$dbusername / SID,SERIAL#:$sid,$serial", '[ ]');
-    uls_value($ts, "blocking session", "${osuser} @ ${machine} / $dbusername / SID,SERIAL#: $sid,$serial", '[ ]');
+    # uls_value($ts, "blocking session", "${osuser} @ ${machine} / $dbusername / SID,SERIAL#: $sid,$serial", '[ ]');
+    uls_value($ts, "blocking session", "${osuser} @ ${machine} / $dbusername / $progrm / SID,SERIAL#: $sid,$serial", '[ ]');
 
     # blocked_objects($ts);
 
@@ -5815,7 +5821,11 @@ print "SQLPLUS_COMMAND=$SQLPLUS_COMMAND\n";
 if (! general_info()) {
   # Check the alert.log, even if Oracle isn't running any longer,
   # it may contain interesting info.
-  alert_log();
+  if ($OPTIONS =~ /NO_ALERT_LOG,/) {
+    print "The check of the alert.log is explicitly disabled by NO_ALERT_LOG\n";
+  } else {
+    alert_log();
+  }
 
   output_error_message("$CURRPROG: Error: A fatal error has ocurred! Aborting script.");
 
@@ -5884,7 +5894,11 @@ pga();
 redo_logs();
 
 # ----- alert log -----
-alert_log();
+if ($OPTIONS =~ /NO_ALERT_LOG,/) {
+  print "The check of the alert.log is explicitly disabled by NO_ALERT_LOG\n";
+} else {
+  alert_log();
+}
 
 # ----- cursors, session cached cursors
 if ($OPTIONS =~ /CURSORS,/) {
@@ -6801,7 +6815,7 @@ cache hit ratio:
 
 The most crucial structure for recovery operations is the redo log, which consists of two or more preallocated files that store all changes made to the database as they occur. Every instance of an Oracle Database has an associated redo log to protect the database in case of an instance failure.
 
-For more information, see the Oracle® Database Administrator´s Guide.
+For more information, see the Oracle Database Administrator's Guide.
 
 redo buffer allocation retries:
   Total number of retries a user process must wait to allocate space in the
@@ -6830,7 +6844,7 @@ redo log space requests:
   user process can over write these entries.
 
 redo log space wait time:
-  Total elapsed waiting time for ´redo log space requests´.
+  Total elapsed waiting time for 'redo log space requests'.
 
 redo size:
   Amount of redo generated.
@@ -6851,8 +6865,8 @@ redo writes:
 summary status all members:
   select member, status from v$logfile;
 
-  If the status for any one member is not blank (which is ok), then ´ERROR´
-  is delivered, else ´OK´.
+  If the status for any one member is not blank (which is ok), then 'ERROR'
+  is delivered, else 'OK'.
 
 member status info:
   This is only delivered in case of an error. It shows a list of those redo
@@ -6865,7 +6879,7 @@ member status info:
 
   <status>:
     INVALID: File is inaccessible
-    STALE  : File´s contents are incomplete
+    STALE  : File's contents are incomplete
     DELETED: File is no longer used
 
 redo log switches:
@@ -6882,7 +6896,9 @@ inactive redo log files
 *System Statistics
 =================
 
-See also the description by Oracle, e.g. for Oracle 12.1 at https://docs.oracle.com/database/121/REFRN/GUID-2FBC1B7E-9123-41DD-8178-96176260A639.htm
+See also the description by Oracle, e.g. for 
+Oracle 12.1 at https://docs.oracle.com/database/121/REFRN/GUID-2FBC1B7E-9123-41DD-8178-96176260A639.htm
+Oracle 19c at https://docs.oracle.com/en/database/oracle/oracle-database/19/refrn/statistics-descriptions-2.html#GUID-2FBC1B7E-9123-41DD-8178-96176260A639
 
 
 consistent changes:
@@ -7319,7 +7335,7 @@ job info:
 Blocking sessions occur when one sessions holds an exclusive lock 
 on an object and doesn't release it before another sessions wants 
 to update the same data. 
-This will block the second (or more) session until the first one has done its work.
+This session will block the second session (or more sessions) until it has done its work.
 
 From the view of the user it will look like the application 
 completely hangs while waiting for the first session to release its lock. 
@@ -7332,7 +7348,8 @@ If necessary, you must kill the appropriate session by using command:
 
 Replace 'sid' and 'serial#' by the values that you find in 'blocking session'.
 
-And you must probably check repetitively for further blocking sessions by using the command:
+You must check repetitively for further sessions that moved up and which are blocking again other sessions.
+Use the command:
 
   SELECT username, osuser, machine, sid, serial#  from v$session
   where sid in (select distinct FINAL_BLOCKING_SESSION from v$session
@@ -7340,13 +7357,28 @@ And you must probably check repetitively for further blocking sessions by using 
 
 and kill those session likewise.
 
+And/or this command to show all blocked sessions:
+
+  set linesize 160
+  col "DB user/OS user(machine) (SID,SERIAL#) is blocking" format a60
+  col "DB user/OS user(machine) (SID) is blocked" format a60
+
+  select 
+    s1.username || '/' || s1.osuser || '(' || s1.machine || ') (SID,SERIAL# = ' || s1.sid || ',' || s1.serial# || ')' AS "DB user/OS user(machine) (SID,SERIAL#) is blocking"
+  , s2.username || '/' || s2.osuser || '(' || s2.machine || ') (SID=' || s2.sid || ') ' AS "DB user/OS user(machine) (SID) is blocked"
+  from v$lock l1, v$session s1, v$lock l2, v$session s2
+  where s1.sid=l1.sid and s2.sid=l2.sid
+    and l1.BLOCK=1 and l2.request > 0
+    and l1.id1 = l2.id1
+    and l2.id2 = l2.id2;
+
 
 count:
   The number of blocked sessions.
 
 blocking session:
-  This is the session that causes the blocking of all 'count' sessions and which must be killed.
-  osusername @ machine / dbusername / SID,SERIAL#:sid,serial#
+  This is the session that causes the blocking of all 'count' sessions and which must probably be killed.
+  osusername @ machine / dbusername / program / SID,SERIAL#:sid,serial#
 
 
 #############################

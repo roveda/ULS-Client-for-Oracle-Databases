@@ -1,53 +1,143 @@
-CHANGES
+%changelog
+* Sun May 30 2021 Roveda <roveda@universal-logging-system.org> 1.0-26
+2021-05-29: Added NO_ALERT_LOG as option in configuration file.
 
-This file keeps the changes to the ULS Client for Oracle Databases package.
-There is only a short information about the changes, 
-but it will point to the changed scripts.
-There are change annotations in the CHANGES file of the Oracle OpTools 
-for watch_oracle.pl which have not been relocated to this file.
+* Wed Mar 17 2021 Roveda <roveda@universal-logging-system.org> 1.0-25
+2021-03-17: Changed 'blocking sessions' in watch_oracle.pl (now version 1.00).
+2021-02-05: Added the number of inactive online redo logs to watch_oracle.pl.
 
-# -----
-2018-10-03, roveda
-  Removed obsolete calculation from sga() in watch_oracle.pl
+* Wed Jan 20 2021 Roveda <roveda@universal-logging-system.org> 1.0-24
+2021-01-18: The sga size is only sent once a day in watch_oracle.pl if it does not change.
 
-2018-02-14, roveda
-  Changed all checks for successful sourcing the environment to 
-  -z "$ORACLE_SID"
-  instead of 
-  $? -ne 0 (what does not work)
+* Thu Nov 26 2020 Roveda <roveda@universal-logging-system.org> 1.0-23
+2020-11-26: implemented a smooth change to new workfile in watch_oracle.pl, 
+no reset to beginning of alert.log. 
 
-2018-01-26, roveda
-  Added 'parse count (hard)', 'transaction rollbacks' and 'user rollbacks' to system statistics.
-  Updated the versions of the used perl modules.
-  %used for tablespaces is renamed to %used_pms (of potential max size).
-  A correct error message is given if the alert.log could not be found (and not '-not found-').
+* Thu Oct 01 2020 Roveda <roveda@universal-logging-system.org> 1.0-22
+2020-10-01: merged the preliminary watch_oracle_pdbs.pl script into watch_oracle.pl.
+Changed crontab file back to one entry.
 
-2018-01-19, roveda
-  Changed watch_oracle.pl
+* Tue Sep 01 2020 Roveda <roveda@universal-logging-system.org> 1.0-21
+2020-09-01: Wrong timestamp for 'maintenance window start-stop' corrected.
+2020-08-30: Enhanced version of watch_oracle_pdbs.pl.
+2020-08-16: Added '--force' to compress commands in Misc.pm
+2020-08-01: Added watch_oracle_pdbs.pl and .sh as a beta version.
+watch_oracle.pl: For Oracle version 18+ the full version is retrieved.
 
-2017-12-20, roveda
-  Changed meaning of %used in tablespace usage, it is now calculated in
-  relation to 'potential max size' (maximum possible size of all data files 
-  as configured). Detail 'free' omitted, it is now calculated on demand in
-  the ULS user interface.
+* Thu Mar 05 2020 Roveda <roveda@universal-logging-system.org> 1.0-20
+2020-03-05: watch_oracle.pl: implemented a workaround for 'ORA-' expressions in
+dba_autotask_job_history.job_info in sub auto_optimizer_stats_collection().
+Added special filter for alert.log entries witch contain ORA- expressions,
+but as patch description and not as real error entry.
+2019-12-27: watch_oracle.pl: implemented a workaround for 'ORA-' expressions in
+dba_autotask_job_history.job_info in sub auto_optimizer_stats_collection().
+2019-12-04: Changed permissions on /etc/uls/oracle/standard.conf to 444.
 
-2017-08-29, roveda
-  Added 'potential max size' to tablespaces.
+* Wed Nov 27 2019 Roveda <roveda@universal-logging-system.org> 1.0-19
+2019-11-27: watch_oracle.pl: debugged data guard information.
+2019-10-22: watch_oracle.pl: Added extended information to auto optimizer stats collection.
 
-2017-08-15, roveda
-  Debugged the list of non-oracle database user with administrative privileges.
+* Tue Oct 15 2019 Roveda <roveda@universal-logging-system.org> 1.0-18
+2019-10-15: Extended watch_oracle.pl by DataGuard and auto optimizer stats collection information.
 
-2017-05-31, roveda
-  Added uls_settings.pl and a matching bash script.
+* Mon Sep 23 2019 Roveda <roveda@universal-logging-system.org> 1.0-17
+Debugged watch_oracle.pl: added a missing semi-colon.
 
-2017-05-26, roveda
-  Added a list of non-oracle database user with administrative privileges
-  to watch_oracle.pl
+* Thu Sep 19 2019 Roveda <roveda@universal-logging-system.org> 1.0-16
+2018-10-03: Removed obsolete calculation from sga() in watch_oracle.pl
+2019-09-19: Added the 'max processes since startup' in watch_oracle.pl
 
-2017-03-30, roveda
-  Improved the descriptive text in standard.conf
+* Sun Mar 11 2018 Roveda <roveda@universal-logging-system.org> 1.0-15
+Added monitoring of failed logins for unified auditing.
 
-2017-03-21, roveda
-  Refreshed the test_before_run.pl to the latest version from the 
-  Oracle OpTools.
+* Wed Feb 14 2018 Roveda <roveda@universal-logging-system.org> 1.0-14
+Changed checks for successful sourcing the environment in all shell scripts.
 
+* Fri Jan 26 2018 Roveda <roveda@universal-logging-system.org> 1.0-13
+Changed watch_oracle.pl, added 'parse count (hard)', 'transaction rollbacks' and 'user rollbacks' to system statistics.
+Updated the versions of the used perl modules.
+%used for tablespaces is renamed to %used_pms (of potential max size).
+A correct error message is given if the alert.log could not be found (and not '-not found-').
+
+* Thu Oct 19 2017 Roveda <roveda@universal-logging-system.org> 1.0-12
+Changed the find to omit environment scripts that have an extension (like a datetimestamp or .old).
+
+* Fri Sep 29 2017 Roveda <roveda@universal-logging-system.org> 1.0-11
+The package threw an error when no environment scripts already existed.
+Finding of environment scripts changed to 'find' instead of direct globbing.
+
+* Mon Sep 25 2017 Roveda <roveda@universal-logging-system.org> 1.0-10
+Changed watch_oracle.pl: added $ORACLE_VERSION_3D for exact version comparisons.
+Column DELEGATE_OPTION does not exist in Oracle versions lower than 12.1.0.2,
+COMMON not in versions lower than 12.1.0.1. So i just skip admin_db_user() for all
+Oracle versions lower than 12.1.0.2.
+
+* Tue Aug 29 2017 Roveda <roveda@universal-logging-system.org> 1.0-9
+Added uls_settings.pl and a matching bash script.
+Debugged the list of non-oracle database user with administrative privileges.
+Added detail 'potential max size' to tablespace values.
+
+* Tue May 30 2017 Roveda <roveda@universal-logging-system.org> 1.0-8
+Changed the ownership of directory /var/tmp/ulsclientoracle to oracle:oinstall, 
+the scripts are not able to create a working directory if it is owned by root.
+Only relevant for (later) added instances, not for initial installation.
+
+* Fri May 26 2017 Roveda <roveda@universal-logging-system.org> 1.0-7
+Changed watch_oracle.pl, added a list of non-oracle user who possess
+administrative privileges.
+
+* Thu Mar 30 2017 Roveda <roveda@universal-logging-system.org> 1.0-6
+Reset the time stamp within the ONCE_A_DAY file for an upgrade and 
+also on initial install.
+
+* Thu Feb 09 2017 Roveda <roveda@universal-logging-system.org> 1.0-5
+Changed the script oracle_instance.sh to watch_oracle.sh and conformed 
+all other scripts and crontab to that new script name.
+Added 'schema information' with 'allocated space' as new teststep to watch_oracle.pl.
+Debugged that after first test.
+Updated watch_oracle.pl to correctly save unknown values if the database is not 
+available or the sql commands cannot be executed.
+Extended Uls2.pm for more verbose output in copy_files().
+
+* Tue Jan 31 2017 Roveda <roveda@universal-logging-system.org> 1.0-4
+Changed file permissions, changed "Requires:"
+
+* Mon Jul 11 2016 Roveda <roveda@universal-logging-system.org> 1.0-3
+Added copyright text and description to this spec file.
+Added correct required packages.
+
+* Wed Jul 06 2016 Roveda <roveda@universal-logging-system.org> 1.0-2
+Debugged bytes2gb() in Misc.pm
+
+* Tue Jul 05 2016 Roveda <roveda@universal-logging-system.org> 1.0-1
+Creation of 1.0-1 as rpm
+Extracted the watch_oracle relevant entries from original CHANGES file.
+Splitted up the oracle_tools to 'ULS Client for Oracle Databases' (uls-client-oracle)
+and 'Operational Tools for Oracle Databases' (optools-oracle).
+The SID-specific .conf file must be sid.conf in /etc/uls/oracle
+
+* Tue Mar 22 2016 Roveda <roveda@universal-logging-system.org>
+Made the get_config2() in Misc.pm safe to read files without any sections.
+The perl scripts exited when trying to read the initially empty oracle_tools_SID.conf file.
+
+* Mon Mar 21 2016 Roveda <roveda@universal-logging-system.org>
+Made the oracle_tools.conf read-only, because non-standard parameters should be
+defined in an oracle_tools_SID.conf file. That allows better and more reliable
+automatic updates of the oracle_tools.
+
+* Thu Mar 18 2016 Roveda <roveda@universal-logging-system.org>
+Changed all .pl to support a second, ORACLE_SID-specific configuration file.
+That is the preparation for fully automatic updates of the oracle_tools:
+All defaults are defined in oracle_tools.conf, if you need any other settings,
+you create an oracle_tools_$ORACLE_SID.conf file which ONLY contains the
+deviant sections and parameters (do not forget the section!).
+
+* Thu Sep 24 2015 Roveda <roveda@universal-logging-system.org>
+Re-worked the sql command for successful and failed logins in watch_oracle.pl.
+
+* Sun Sep 20 2015 Roveda <roveda@universal-logging-system.org>
+Added information from registry$history to ora_dbinfo.
+Added successful logins to watch_oracle.
+
+* Thu Feb 12 2015 Roveda <roveda@universal-logging-system.org>
+Debugged scheduler_details() in watch_oracle.pl
