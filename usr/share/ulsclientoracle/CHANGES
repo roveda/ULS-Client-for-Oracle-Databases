@@ -1,4 +1,7 @@
 %changelog
+* Sun Oct 17 2021 Roveda <roveda@universal-logging-system.org> 1.0-27
+2021-10-17: Corrected the retrieval of usage in tablespace_usage().
+
 * Sun May 30 2021 Roveda <roveda@universal-logging-system.org> 1.0-26
 2021-05-29: Added NO_ALERT_LOG as option in configuration file.
 

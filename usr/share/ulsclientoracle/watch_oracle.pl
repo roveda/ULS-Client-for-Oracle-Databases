@@ -493,6 +493,12 @@
 #   Added NO_ALERT_LOG as possible option in the configuration file.
 #   Perhaps, the alert.log is checked by a foreign tool.
 #
+# 2021-08-03      roveda      1.02
+#   Changed retrieval of usage in tablespace_usage()
+#
+# 2021-10-18      roveda      1.03
+#   Corrected the retrieval of usage in tablespace_usage()
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -512,7 +518,7 @@ use lib ".";
 use Misc 0.43;
 use Uls2 1.16;
 
-my $VERSION = 1.01;
+my $VERSION = 1.03;
 
 # ===================================================================
 # The "global" variables
@@ -1361,24 +1367,47 @@ sub tablespace_usage {
         variable ts varchar2(30)
         exec :ts := '$ts_name'
 
-        select 'lazy', nvl(sum(BYTES_FREE), 0), nvl(sum(BYTES_USED), 0) from V\$TEMP_SPACE_HEADER where tablespace_name = :ts;
-        select 'current', nvl(sum(bytes_used), 0) from v\$temp_extent_pool where tablespace_name = :ts;
+        variable curr_con_id number
+        exec :curr_con_id := $CURRENT_CON_ID
 
-        select 'max_auto_extensible', nvl(sum( greatest(maxbytes, bytes)), 0)
-          from dba_temp_files
-          where tablespace_name = :ts and autoextensible = 'YES';
+        select 'lazy', nvl(sum(BYTES_FREE), 0), nvl(sum(BYTES_USED), 0)
+          from V\$TEMP_SPACE_HEADER
+          where tablespace_name = :ts
+            and con_id = :curr_con_id;
 
-        select 'max_non_extensible', nvl(sum( greatest(maxbytes, bytes)), 0)
+        select 'current', nvl(sum(bytes_used), 0)
+          from v\$temp_extent_pool
+          where tablespace_name = :ts
+            and con_id = :curr_con_id;
+
+        select autoextensible, nvl(sum(bytes), 0), nvl(sum( greatest(maxbytes, bytes)), 0)
           from dba_temp_files
-          where tablespace_name = :ts and autoextensible = 'NO';
+          where tablespace_name = :ts
+          group by autoextensible;
 
       ";
+      # AUT    NVL(SUM(BYTES),0) NVL(SUM(GREATEST(MAXBYTES,BYTES)),0)
+      # --- -------------------- ------------------------------------
+      # YES            104857600                          34359721984
+      # NO            1073741824                           1073741824
+      #                 sum=size               sum=potential max size
 
       if (! do_sql($sql)) {return(0)}
 
+      my $size_y = 0;
+      if ( get_value($TMPOUT1, $DELIM, "YES", 2) ) { $size_y = trim(get_value($TMPOUT1, $DELIM, "YES", 2)) }
+      my $size_n = 0;
+      if ( get_value($TMPOUT1, $DELIM, "NO", 2) ) { $size_n = trim(get_value($TMPOUT1, $DELIM, "NO", 2)) }
+      my $size = $size_y + $size_n;
+      # Which is also the sum of the size of all temp files.
+
+      my $pms_y = 0;
+      if ( get_value($TMPOUT1, $DELIM, "YES", 3) ) { $pms_y = trim(get_value($TMPOUT1, $DELIM, "YES", 3)) }
+      my $pms_n = 0;
+      if ( get_value($TMPOUT1, $DELIM, "NO", 3) ) { $pms_n = trim(get_value($TMPOUT1, $DELIM, "NO", 3)) }
+
       # Max potential size that the temp files can grow to
-      my $potential_max_size = trim(get_value($TMPOUT1, $DELIM, "max_auto_extensible"));
-      $potential_max_size   += trim(get_value($TMPOUT1, $DELIM, "max_non_extensible"));
+      my $potential_max_size = $pms_y + $pms_n;
       uls_value("$tstep:$ts_name", "potential max size", bytes2gb($potential_max_size), "GB");
 
       # The space within the temporary tablespaces is only lazily
@@ -1391,43 +1420,12 @@ sub tablespace_usage {
       my $used_lazy = trim(get_value($TMPOUT1, $DELIM, "lazy", 3));
       my $used      = trim(get_value($TMPOUT1, $DELIM, "current", 2));
 
-      # my $free_lazy = $size - $used_lazy;
-      my $size = $used_lazy + $free_lazy;
-
       my $free = $size - $used;
-
-      # uls_value("$tstep:$ts_name", "size",        pround($size / $MB, -1),      "MB");
-      # uls_value("$tstep:$ts_name", "used (lazy)", pround($used_lazy / $MB, -1), "MB");
-      # uls_value("$tstep:$ts_name", "free (lazy)", pround($free_lazy / $MB, -1), "MB");
-      # uls_value("$tstep:$ts_name", "size",        bytes2gb($size),      "GB");
 
       uls_value("$tstep:$ts_name", "current size", bytes2gb($size),      "GB");
       uls_value("$tstep:$ts_name", "used (lazy)",  bytes2gb($used_lazy), "GB");
 
-      # That one is now calculated on demand in ULS:
-      # uls_value("$tstep:$ts_name", "free (lazy)", bytes2gb($free_lazy), "GB");
-
-      # if (abs($size) > $VERY_SMALL) {
-      #   uls_value("$tstep:$ts_name", "%used (lazy)", pround(100.0 / $size * $used_lazy, -1), "%");
-      # }
-
-      # uls_value("$tstep:$ts_name", "used", pround($used / $MB, -1), "MB");
-      # uls_value("$tstep:$ts_name", "free", pround($free / $MB, -1), "MB");
-
       uls_value("$tstep:$ts_name", "used", bytes2gb($used), "GB");
-
-      # That one is now calculated on demand in ULS:
-      # uls_value("$tstep:$ts_name", "free", bytes2gb($free), "GB");
-
-      # if (abs($size) > $VERY_SMALL) {
-      #   uls_value("$tstep:$ts_name", "%used", pround(100.0 / $size * $used, -1), "%");
-      # }
-
-      # %used is now calculated on "potential max size" and named: %used_pms
-      if (abs($potential_max_size) > $VERY_SMALL) {
-        uls_value("$tstep:$ts_name", "%used_pms", pround(100.0 / $potential_max_size * $used, -1), "%");
-      }
-
 
       send_doc($tstep, "$tstep:$ts_name");
 
@@ -1442,31 +1440,36 @@ sub tablespace_usage {
     
       $supported = "yes";
 
+      #  select 'size', nvl(sum(bytes), 0) from dba_data_files where tablespace_name = :ts;
       $sql = "
         variable ts varchar2(30)
         exec :ts := '$ts_name'
 
-        select 'size', nvl(sum(bytes), 0) from dba_data_files where tablespace_name = :ts;
         select 'free', nvl(sum(bytes), -1) from dba_free_space where tablespace_name = :ts;
 
-        select 'max_auto_extensible', nvl(sum( greatest(maxbytes, bytes)), 0)
+        select autoextensible, nvl(sum(bytes), 0), nvl(sum( greatest(maxbytes, bytes)), 0)
           from dba_data_files
-          where tablespace_name = :ts and autoextensible = 'YES';
-
-        select 'max_non_extensible', nvl(sum( greatest(maxbytes, bytes)), 0)
-          from dba_data_files
-          where tablespace_name = :ts and autoextensible = 'NO';
+          where tablespace_name = :ts
+          group by autoextensible;
 
       ";
 
       if (! do_sql($sql)) {return(0)}
 
-      # Max potential size that the data files can grow to
-      my $potential_max_size = trim(get_value($TMPOUT1, $DELIM, "max_auto_extensible"));
-      $potential_max_size   += trim(get_value($TMPOUT1, $DELIM, "max_non_extensible"));
-      uls_value("$tstep:$ts_name", "potential max size", bytes2gb($potential_max_size), "GB");
+      my $size_y = 0;
+      if ( get_value($TMPOUT1, $DELIM, "YES", 2) ) { $size_y = trim(get_value($TMPOUT1, $DELIM, "YES", 2)) }
+      my $size_n = 0;
+      if ( get_value($TMPOUT1, $DELIM, "NO", 2) ) { $size_n = trim(get_value($TMPOUT1, $DELIM, "NO", 2)) }
+      my $size = $size_y + $size_n;
 
-      my $size = trim(get_value($TMPOUT1, $DELIM, "size"));
+      my $pms_y = 0;
+      if ( get_value($TMPOUT1, $DELIM, "YES", 3) ) { $pms_y = trim(get_value($TMPOUT1, $DELIM, "YES", 3)) }
+      my $pms_n = 0;
+      if ( get_value($TMPOUT1, $DELIM, "NO", 3) ) { $pms_n = trim(get_value($TMPOUT1, $DELIM, "NO", 3)) }
+
+      # Max potential size that the temp files can grow to
+      my $potential_max_size = $pms_y + $pms_n;
+      uls_value("$tstep:$ts_name", "potential max size", bytes2gb($potential_max_size), "GB");
 
       my $free = trim(get_value($TMPOUT1, $DELIM, "free"));
       # free may be NULL, if there are no objects living
@@ -1478,18 +1481,8 @@ sub tablespace_usage {
 
       my $used = $size - $free;
 
-      # uls_value("$tstep:$ts_name", "size", pround($size / $MB, -1), "MB");
-      # uls_value("$tstep:$ts_name", "used", pround($used / $MB, -1), "MB");
-      # uls_value("$tstep:$ts_name", "free", pround($free / $MB, -1), "MB");
-
       uls_value("$tstep:$ts_name", "size", bytes2gb($size), "GB");
       uls_value("$tstep:$ts_name", "used", bytes2gb($used), "GB");
-
-      # uls_value("$tstep:$ts_name", "free", bytes2gb($free), "GB");
-
-      # if (abs($size) > $VERY_SMALL) {
-      #   uls_value("$tstep:$ts_name", "%used", pround(100.0 / $size * $used, -1), "%");
-      # }
 
       if (abs($potential_max_size) > $VERY_SMALL) {
         uls_value("$tstep:$ts_name", "%used_pms", pround(100.0 / $potential_max_size * $used, -1), "%");
