@@ -3,7 +3,7 @@
 # watch_oracle.sh 
 #
 # ---------------------------------------------------------
-# Copyright 2016 - 2020, roveda
+# Copyright 2016 - 2021, roveda
 #
 # This file is part of the 'ULS Client for Oracle'.
 #
@@ -72,13 +72,18 @@
 # 2020-08-30      roveda      0.05
 #   Added NLS_TIMESTAMP_FORMAT and NLS_TIMESTAMP_TZ_FORMAT.
 #
+# 2021-11-27      roveda      0.06
+#   Changed default LANG setting from C to en_US.UTF-8
+#
+#
 # ===================================================================
 
 
 USAGE="watch_oracle.sh  <environment_script>  <configuration_file>"
 
 unset LC_ALL
-export LANG=C
+# export LANG=C
+export LANG=en_US.UTF-8
 
 cd `dirname $0`
 

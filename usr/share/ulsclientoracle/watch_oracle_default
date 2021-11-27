@@ -58,6 +58,8 @@
 # 2018-01-25      roveda      0.01
 #   Created
 #
+# 2021-11-27      roveda      0.02
+#   Changed default LANG setting from C to en_US.UTF-8
 #
 #
 # ===================================================================
@@ -66,7 +68,8 @@
 USAGE="watch_oracle_default"
 
 unset LC_ALL
-export LANG=C
+# export LANG=C
+export LANG=en_US.UTF-8
 
 cd `dirname $0`
 

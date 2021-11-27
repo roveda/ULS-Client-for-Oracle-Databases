@@ -3,7 +3,7 @@
 # uls_settings.sh
 #
 # ---------------------------------------------------------
-# Copyright 2017, roveda
+# Copyright 2017-2021, roveda
 #
 # This file is part of the 'ULS Client for Oracle'.
 #
@@ -60,13 +60,18 @@
 #     instead of
 #     $? -ne 0 (what does not work)
 #
+# 2021-11-27      roveda      0.03
+#   Changed default LANG setting from C to en_US.UTF-8
+#
+#
 # ===================================================================
 
 
 USAGE="uls_settings.sh  <environment_script>  <configuration_file>"
 
 unset LC_ALL
-export LANG=C
+# export LANG=C
+export LANG=en_US.UTF-8
 
 cd `dirname $0`
 

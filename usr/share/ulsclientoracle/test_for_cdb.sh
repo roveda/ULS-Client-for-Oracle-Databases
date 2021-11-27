@@ -3,7 +3,7 @@
 # test_for_cdb.sh
 #
 # ---------------------------------------------------------
-# Copyright 2020, roveda
+# Copyright 2020-2021, roveda
 #
 # This file is part of the 'ULS Client for Oracle'.
 #
@@ -62,6 +62,8 @@
 # 2020-08-29      roveda      0.01
 #   Created
 #
+# 2021-11-27      roveda      0.02
+#   Changed default LANG setting from C to en_US.UTF-8
 #
 # ===================================================================
 
@@ -69,7 +71,8 @@
 USAGE="test_for_cdb.sh  <environment_script> "
 
 unset LC_ALL
-export LANG=C
+# export LANG=C
+export LANG=en_US.UTF-8
 
 cd `dirname $0`
 

@@ -1,4 +1,15 @@
 %changelog
+* Sat Nov 27 2021 Roveda <roveda@universal-logging-system.org> 1.0-29
+2021-11-27: Changed default LANG setting from C to en_US.UTF-8 in all .sh scripts.
+Added full UTF-8 support to all perl scripts Umlaute should now be processed correctly 
+in output to files sent to ULS.
+2021-11-16: Added detail 'database role - status' in watch_oracle.pl. The minus sign 
+is used as separator instead of the comma, which always led to misinterpretations in 
+limit and report definitions ('database role, status' will be removed in a later version).
+
+* Wed Oct 20 2021 Roveda <roveda@universal-logging-system.org> 1.0-28
+2021-10-20: Number of max processes will be re-sent to ULS, if the value has changed.
+
 * Sun Oct 17 2021 Roveda <roveda@universal-logging-system.org> 1.0-27
 2021-10-17: Corrected the retrieval of usage in tablespace_usage().
 

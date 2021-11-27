@@ -499,15 +499,44 @@
 # 2021-10-18      roveda      1.03
 #   Corrected the retrieval of usage in tablespace_usage()
 #
+# 2021-10-20      roveda      1.04
+#   Made the max_processes persistent in the workfile, send to ULS if it 
+#   has changed since last run.
+#
+# 2021-11-16      roveda      1.05
+#   Added detail 'database role - status', detail 'database role, status' contains a comma 
+#   and leads often to problems in ULS limits as a comma is the separator in 
+#   limit definitions. 'database role, status' will be turned off in a later version.
+#
+# 2021-11-27      roveda      1.06
+#   Added full UTF-8 support. Thanks for the boilerplate
+#   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+#
 #
 #   Change also $VERSION later in this script!
 #
 # ===================================================================
 
 
-use 5.003_07;
+# use 5.003_07;
 use strict;
 use warnings;
+
+# -----------------------------------------------------------------------------
+# boilerplate from
+# https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+
+use warnings    qw< FATAL  utf8     >;
+use open        qw< :std  :utf8     >;
+use charnames   qw< :full >;
+use feature     qw< unicode_strings >;
+
+# use File::Basename      qw< basename >;
+# use Carp                qw< carp croak confess cluck >;
+use Encode              qw< encode decode >;
+use Unicode::Normalize  qw< NFD NFC >;
+# -----------------------------------------------------------------------------
+
 use File::Basename;
 use File::Copy;
 use Config::IniFiles;
@@ -515,10 +544,10 @@ use Time::Local;
 
 # These are my modules:
 use lib ".";
-use Misc 0.43;
-use Uls2 1.16;
+use Misc 0.44;
+use Uls2 1.17;
 
-my $VERSION = 1.03;
+my $VERSION = 1.06;
 
 # ===================================================================
 # The "global" variables
@@ -1098,6 +1127,7 @@ sub general_info {
     # uls_value($ts, "database status", $db_status, "[ ]");
     # uls_value($ts, "database role, status", "$db_role, $db_status", "[ ]");
     uls_value($ts, "database role, status", "$ORACLE_DBROLE, $ORACLE_STATUS", "[ ]");
+    uls_value($ts, "database role - status", "$ORACLE_DBROLE - $ORACLE_STATUS", "[ ]");
 
     output_error_message(sub_name() . ": $abort_msg");
     uls_send_file_contents($IDENTIFIER, "message", $TMPOUT1);
@@ -1181,6 +1211,7 @@ sub general_info {
     # Send all values to ULS.
     # uls_value($ts, "database status", $db_status, "[ ]");
     uls_value($ts, "database role, status", "$ORACLE_DBROLE, $ORACLE_STATUS", "[ ]");
+    uls_value($ts, "database role - status", "$ORACLE_DBROLE - $ORACLE_STATUS", "[ ]");
     uls_value($ts, "oracle version", $ORACLE_VERSION, "[ ]");
 
     # Only if the version differs from the full version
@@ -1736,6 +1767,10 @@ sub sessions_processes {
   # my $ts = "sessions and processes";
   my $ts = "processes";
 
+  # Value from last run
+  my $last_max_procs = $WORKFILE->val(sub_name(), "max_processes", 0);
+
+  # 'sessions' is directly derived from processes, so that metric is unnecessary.
   #  -- select 'sessions', count(*) from v\$session;
 
   my $sql = "
@@ -1757,9 +1792,12 @@ sub sessions_processes {
   my $M = trim(get_value($TMPOUT1, $DELIM, "max_processes"));
   my $MPC = trim(get_value($TMPOUT1, $DELIM, "max_processes_since_startup"));
 
-  if ( $ONCE_A_DAY ) {
+  if ( $ONCE_A_DAY  || ($last_max_procs != $M) {
     uls_value($ts, "max processes", $M, "#");
   }
+
+  # Make 'max processes' üersistent in workfile
+  set_value(\$WORKFILE, sub_name(), "max_processes", $M);
 
   uls_value($ts, "processes", $P, "#");
   # uls_value($ts, "sessions", $S, "#");

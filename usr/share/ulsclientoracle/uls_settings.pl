@@ -3,7 +3,7 @@
 # uls_settings.pl - print all effective ULS settings to stdout
 #
 # ---------------------------------------------------------
-# Copyright 2017, roveda
+# Copyright 2017, 2021, roveda
 #
 # This file is part of the 'ULS Client for Oracle'.
 # 
@@ -68,23 +68,44 @@
 #
 #   Initial version
 #
+# 2021-11-27      roveda      0.02
+#
+#   #   Added full UTF-8 support. Thanks for the boilerplate
+#   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+#
+#
 #   Change also $VERSION later in this script!
 #
 # ===================================================================
 
 
-use 5.003_07;
+# use 5.003_07;
 use strict;
 use warnings;
+# -----------------------------------------------------------------------------
+# boilerplate from
+# https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+
+use warnings    qw< FATAL  utf8     >;
+use open        qw< :std  :utf8     >;
+use charnames   qw< :full >;
+use feature     qw< unicode_strings >;
+
+# use File::Basename      qw< basename >;
+# use Carp                qw< carp croak confess cluck >;
+use Encode              qw< encode decode >;
+use Unicode::Normalize  qw< NFD NFC >;
+# -----------------------------------------------------------------------------
+
 use File::Basename;
 
 
 # These are my modules:
 use lib ".";
-use Misc 0.40;
-use Uls2 1.15;
+use Misc 0.44;
+use Uls2 1.17;
 
-my $VERSION = 0.01;
+my $VERSION = 0.02;
 
 # ===================================================================
 # The "global" variables
