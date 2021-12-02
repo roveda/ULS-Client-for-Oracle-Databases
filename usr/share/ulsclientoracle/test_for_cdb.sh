@@ -65,23 +65,32 @@
 # 2021-11-27      roveda      0.02
 #   Changed default LANG setting from C to en_US.UTF-8
 #
+# 2021-12-02      roveda      0.03
+#   Added echoerr() and its usage
+#   Get current directory thru 'readlink'.
+#
 # ===================================================================
 
+# -----
+# Function to echo to stderr
+echoerr() { printf "%s\n" "$*" >&2; }
 
+# -----
 USAGE="test_for_cdb.sh  <environment_script> "
 
 unset LC_ALL
 # export LANG=C
 export LANG=en_US.UTF-8
 
-cd `dirname $0`
+mydir=$(dirname "$(readlink -f "$0")")
+cd "$mydir"
 
 # -----
 # Check number of arguments
 
 if [[ $# -ne 1 ]] ; then
-  echo "ERROR: You must specify the script to set the Oracle environment." >&2
-  echo "$USAGE"
+  echoerr "ERROR: You must specify the script to set the Oracle environment."
+  echoerr "$USAGE"
   exit 1
 fi
 
@@ -91,28 +100,25 @@ fi
 ORAENV="$1"
 
 if [[ ! -f "$ORAENV" ]] ; then
-  echo "Error: environment script '$ORAENV' not found => aborting script" >&2
-
+  echoerr "Error: environment script '$ORAENV' not found => aborting script"
   exit 2
 fi
 
 . "$ORAENV"
 
 if [[ -z "$ORACLE_SID" ]] ; then
-  echo
-  echo "Error: the Oracle environment is not set up correctly => aborting script" >&2
-
+  echoerr "Error: the Oracle environment is not set up correctly => aborting script"
   exit 2
 fi
 
 
 # -----
 
-is_cdb=$(echo $(sqlplus -s -l / as sysdba <<EOF
+is_cdb=$(sqlplus -s -l -R 3 / as sysdba <<EOF
   set echo off heading off feedback off
   select cdb from v\$database;
 EOF
-))
+)
 
 # YES/NO
 

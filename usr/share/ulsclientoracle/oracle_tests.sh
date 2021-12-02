@@ -3,7 +3,7 @@
 # oracle_tests.sh
 #
 # ---------------------------------------------------------
-# Copyright 2016-2017, roveda
+# Copyright 2016-2017, 2021 roveda
 #
 # This file is part of the 'ULS Client for Oracle'.
 #
@@ -63,12 +63,21 @@
 # 2017-01-09      roveda      0.02
 #   Removed some parameters.
 #
+# 2021-12-02      roveda      0.03
+#   Added echoerr() and its usage, changed identification of WDIR.
+#
 #
 # ===================================================================
 
+# -----
+# Function to echo to stderr
+echoerr() { printf "%s\n" "$*" >&2; }
+
+# -----
 USAGE="oracle_tests.sh  <script_to_execute>"
 
-WDIR="`dirname $0`"
+# WDIR="`dirname $0`"
+WDIR=$(dirname "$(readlink -f "$0")")
 
 # Name of script to execute
 SCRIPT="$1"
@@ -77,7 +86,7 @@ SCRIPT="$1"
 STDCONF="/etc/uls/oracle/standard.conf"
 
 if [ ! -f "$STDCONF" ] ; then
-  echo "Error: configuration file '$STDCONF' does not exist => aborting script"
+  echoerr "ERROR: configuration file '$STDCONF' does not exist => aborting script"
   exit 1
 fi
 
@@ -95,12 +104,12 @@ if [[ -d "$ORAENVDIR" ]] ; then
     if [[ -r "$env_file" ]] ; then
       "$WDIR"/$SCRIPT "$env_file" "$STDCONF" &
     else
-      echo "Error: environment script '$env_file' not found, script '$SCRIPT' for this environment not executed."
+      echo "ERROR: environment script '$env_file' not found, script '$SCRIPT' for this environment skipped."
     fi
 
   done
 else
-  echo "Error: directory '$ORAENVDIR' does not exist or is not readable => aborting script"
+  echoerr "ERROR: directory '$ORAENVDIR' does not exist or is not readable => aborting script"
   exit 2
 fi
 

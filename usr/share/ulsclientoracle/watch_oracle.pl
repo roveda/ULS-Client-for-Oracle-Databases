@@ -511,6 +511,10 @@
 # 2021-11-27      roveda      1.06
 #   Added full UTF-8 support. Thanks for the boilerplate
 #   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
+#   Added teststep documentation for UNDO tablespaces about space used by transactions.
+#
+# 2021-12-02      roveda      1.07
+#   Extraction of trace file names in alert_log() corrected.
 #
 #
 #   Change also $VERSION later in this script!
@@ -547,7 +551,7 @@ use lib ".";
 use Misc 0.44;
 use Uls2 1.17;
 
-my $VERSION = 1.06;
+my $VERSION = 1.07;
 
 # ===================================================================
 # The "global" variables
@@ -1792,7 +1796,7 @@ sub sessions_processes {
   my $M = trim(get_value($TMPOUT1, $DELIM, "max_processes"));
   my $MPC = trim(get_value($TMPOUT1, $DELIM, "max_processes_since_startup"));
 
-  if ( $ONCE_A_DAY  || ($last_max_procs != $M) {
+  if ( $ONCE_A_DAY  || ($last_max_procs != $M) ) {
     uls_value($ts, "max processes", $M, "#");
   }
 
@@ -3245,8 +3249,16 @@ sub alert_log {
         # Send the first 30 lines of the trace file to the ULS
         # Line looks like: "Errors in file /oracle/admin/spexp/udump/spexp_ora_17518.trc:"
 
+        # Example lines:
+        # Errors in file /db/.../diag/rdbms/xxx/xxx/trace/orcl_ora_5194.trc:
+        # Errors in file /db/.../diag/rdbms/xxx/xxx/trace/orcl_ora_34248.trc  (incident=29893):
+        # (this seems to be new in Oracle 18/19)
+
         # Extract the file name
-        $L =~ /Errors in file (.*):/;
+        # $L =~ /Errors in file (.*):/;
+
+        # non-greedy up to blank or colon
+        $L =~ /Errors in file (.*?)[: ]/;
         my $trc_file = $1;
 
         if ($trc_file) {
@@ -7082,6 +7094,12 @@ used (lazy), %used (lazy):
   These figures reflect the "normal" space usage of the temporary
   tablespace. But the space is only reused on demand (lazy) after
   all the free space has been used up.
+
+active:
+unexpired:
+expired:
+  Used UNDO space for the different transaction states.
+ 
 
 ###########################
 *Open Cursors

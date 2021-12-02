@@ -1,4 +1,8 @@
 %changelog
+* Thu Dec 02 2021 Roveda <roveda@universal-logging-system.org> 1.0-30
+2021-12-02: Changed to LANG=en_US.UTF-8 in all bash scripts, determine the current 
+directory by the use of 'readlink', added echoerr() as local function.
+
 * Sat Nov 27 2021 Roveda <roveda@universal-logging-system.org> 1.0-29
 2021-11-27: Changed default LANG setting from C to en_US.UTF-8 in all .sh scripts.
 Added full UTF-8 support to all perl scripts Umlaute should now be processed correctly 
