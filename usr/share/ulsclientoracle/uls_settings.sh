@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # uls_settings.sh
 #
@@ -134,7 +134,7 @@ export HOSTNAME
 export LANG=en_US.UTF-8
 
 # Set Oracle NLS parameter
-export NLS_LANG=AMERICAN_AMERICA.UTF8
+export NLS_LANG=AMERICAN_AMERICA.AL32UTF8
 export NLS_DATE_FORMAT="YYYY-MM-DD hh24:mi:ss"
 export NLS_TIMESTAMP_FORMAT="YYYY-MM-DD HH24:MI:SS"
 export NLS_TIMESTAMP_TZ_FORMAT="YYYY-MM-DD HH24:MI:SS TZH:TZM"

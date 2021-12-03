@@ -1,4 +1,8 @@
 %changelog
+* Fri Dec 03 2021 Roveda <roveda@universal-logging-system.org> 1.0-31
+2021-12-03: Trying to convert strangely encoded lines of the alert.log to 
+Perl's internal encoding to preserve umlaute in watch_oracle.pl
+
 * Thu Dec 02 2021 Roveda <roveda@universal-logging-system.org> 1.0-30
 2021-12-02: Changed to LANG=en_US.UTF-8 in all bash scripts, determine the current 
 directory by the use of 'readlink', added echoerr() as local function.

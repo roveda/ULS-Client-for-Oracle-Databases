@@ -515,6 +515,15 @@
 #
 # 2021-12-02      roveda      1.07
 #   Extraction of trace file names in alert_log() corrected.
+#   Open alert.log in raw mode (although that scrambles (again) umlaute.
+#   The alert.log may be in any encoding, depending on the character set of the database.
+#   That can lead to aborting this script. So this is the current work around.
+#
+# 2021-12-03      roveda      1.08
+#   Found perhaps a workaround for the scrambled umlaute by guessing the encoding 
+#   of each line in the alert.log and recoding it to 'latin1' (Perl internal).
+#   The list of possible encodings is currently fixed but will be moved to the 
+#   configuration file in a future release.
 #
 #
 #   Change also $VERSION later in this script!
@@ -546,12 +555,15 @@ use File::Copy;
 use Config::IniFiles;
 use Time::Local;
 
+use Encode::Guess;
+use Encode qw(from_to);
+
 # These are my modules:
 use lib ".";
 use Misc 0.44;
 use Uls2 1.17;
 
-my $VERSION = 1.07;
+my $VERSION = 1.08;
 
 # ===================================================================
 # The "global" variables
@@ -3117,6 +3129,30 @@ sub find_alert {
 
 
 # ===================================================================
+sub find_codec {
+
+  my $str = $_[0];
+  my $decodername = "";
+
+  # Check defaults
+  my $decoder = Encode::Guess->guess($str);
+  if ( ref($decoder) ) { return($decoder->name) }
+
+  # Check some more
+  foreach my $suspect ('cp1252', 'iso-8859-15', 'iso-8859-1') {
+    $decoder = guess_encoding($str, $suspect);
+    if ( ref($decoder) ) {
+      $decodername = $decoder->name ;
+      last;
+    }
+  }
+
+  return($decodername);
+
+} # find_codec
+
+
+# ===================================================================
 sub alert_log {
 
   title(sub_name());
@@ -3141,7 +3177,13 @@ sub alert_log {
     output_error_message(sub_name() . ": Error: Cannot find path to alert.log, check the log file.");
     return(0);
   }
-  if (! open(LOGFILE, $alert_log)) {
+  # if (! open(LOGFILE, $alert_log)) {
+  #
+  # Open the alert.log in raw mode, else you may have problems
+  # when the database characterset is not AL32UTF8
+  # (although this scrambles umlaute, if database runs in NLS_TERRITORY with umlaute)
+  # So, decide: aborting script or shit on umlaute...
+  if (! open(LOGFILE, '<:raw', $alert_log)) {
     output_error_message(sub_name() . ": Error: Cannot open '$alert_log' for reading: $!");
     return(0);
   }
@@ -3214,6 +3256,16 @@ sub alert_log {
       } else {
         print "Line has NO backslash n => ignore this line, leave while loop prematurely.\n";
         last;
+      }
+
+      # Change the encoding of the line to perls internal
+      my $enc = find_codec($L);
+      if ($enc !~ /ascii/i) {
+        my $destenc = 'latin1';
+        print "Changing encoding from '$enc' to '$destenc'\n";
+        if ( ! from_to($L, $enc, $destenc) ) {
+          output_error_message(sub_name() . ": Error: Cannot convert [$L] from '$enc' to '$destenc'");
+        }
       }
 
       # print $L;
