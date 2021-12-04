@@ -1,4 +1,9 @@
 %changelog
+* Sat Dec 04 2021 Roveda <roveda@universal-logging-system.org> 1.0-32
+2021-12-04: New parameter ADDITIONAL_ENCODINGS in etc/uls/oracle/standard.conf.
+Implemented this parameter in watch_oracle.pl to allow customizing of additional
+encoding checks of alert.log lines (which depends on the database character set).
+
 * Fri Dec 03 2021 Roveda <roveda@universal-logging-system.org> 1.0-31
 2021-12-03: Trying to convert strangely encoded lines of the alert.log to 
 Perl's internal encoding to preserve umlaute in watch_oracle.pl

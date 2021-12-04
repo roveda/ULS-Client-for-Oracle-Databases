@@ -525,6 +525,10 @@
 #   The list of possible encodings is currently fixed but will be moved to the 
 #   configuration file in a future release.
 #
+# 2021-12-04      roveda      1.09
+#   Added new configuration parameter ADDITIONAL_ENCODINGS for the list of 
+#   encodings that are to be check additionally when reading alert.log lines.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -563,7 +567,7 @@ use lib ".";
 use Misc 0.44;
 use Uls2 1.17;
 
-my $VERSION = 1.08;
+my $VERSION = 1.09;
 
 # ===================================================================
 # The "global" variables
@@ -679,6 +683,11 @@ my $CURRENT_CON_ID = -1;
 
 # Status of the current PDB
 my $PDB_STATUS = "";
+
+# Hold additional encodings for alert.log content checking
+# (see sub find_codec)
+my @ADDITIONAL_ENCODINGS = ();
+
 
 
 
@@ -3132,22 +3141,24 @@ sub find_alert {
 sub find_codec {
 
   my $str = $_[0];
-  my $decodername = "";
 
   # Check defaults
+  # Default encodings contain (as of 2021-12-01), in that sequence:
+  #   ascii  ascii-ctrl  cp1252  iso-8859-1  null  UCS-2BE  UCS-2LE  
+  #   UTF-16  UTF-16BE  UTF-16LE  UTF-32  UTF-32BE  UTF-32LE  
+  #   utf-8-strict  utf8
+
   my $decoder = Encode::Guess->guess($str);
   if ( ref($decoder) ) { return($decoder->name) }
 
-  # Check some more
-  foreach my $suspect ('cp1252', 'iso-8859-15', 'iso-8859-1') {
+  # Check some more if nothing found
+  foreach my $suspect (@ADDITIONAL_ENCODINGS) {
     $decoder = guess_encoding($str, $suspect);
-    if ( ref($decoder) ) {
-      $decodername = $decoder->name ;
-      last;
-    }
+    if ( ref($decoder) ) { return($decoder->name) }
   }
 
-  return($decodername);
+  # If no encoding matches
+  return(undef);
 
 } # find_codec
 
@@ -3262,7 +3273,7 @@ sub alert_log {
       my $enc = find_codec($L);
       if ($enc !~ /ascii/i) {
         my $destenc = 'latin1';
-        print "Changing encoding from '$enc' to '$destenc'\n";
+        print "Changing encoding from guessed '$enc' to '$destenc'\n";
         if ( ! from_to($L, $enc, $destenc) ) {
           output_error_message(sub_name() . ": Error: Cannot convert [$L] from '$enc' to '$destenc'");
         }
@@ -5713,6 +5724,17 @@ if ($CFG{"WATCH_ORACLE.OPTIONS"}) {
   $OPTIONS = join(",", @O) . ",";
   print "OPTIONS=$OPTIONS\n";
 }
+
+# ----------
+# Get the additional encodings for guessing the encoding
+# of each line in the alert.log
+
+if ($CFG{"WATCH_ORACLE.ADDITIONAL_ENCODINGS"}) {
+  @ADDITIONAL_ENCODINGS = split(/\s+/, $CFG{"WATCH_ORACLE.ADDITIONAL_ENCODINGS"});
+  @ADDITIONAL_ENCODINGS = map(trim($_), @ADDITIONAL_ENCODINGS);
+  print "Additional encodings for alert.log check:", join(" ", @ADDITIONAL_ENCODINGS), "\n";
+}
+
 
 # ----------
 # This sets the %ULS to all necessary values
