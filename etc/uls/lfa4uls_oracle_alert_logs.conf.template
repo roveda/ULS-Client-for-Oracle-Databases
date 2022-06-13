@@ -1,0 +1,44 @@
+# /etc/uls/lfa4uls_oracle_alert_log.conf
+#
+# lfa4uls Konfiguration fuer die alert.log der Oracle Instanzen
+#
+
+# Zeichen '"' muessen gequotet werden
+writequoting = \"
+
+# Pfade der alert-Logs
+inputfiles = /db/*/*/diag/rdbms/*/*/trace/alert*.log
+
+# ODER (für Oracle 12):
+inputfiles = /oradata/*/diag/rdbms/*/*/trace/alert*.log
+
+# Ausnahmen
+vreg_file   = /etc/uls/lfa4uls_oracle_excludes.conf
+
+# Zeile mit neuem Datum
+reg     = ^%t
+iformat = %t
+
+# Zeile mit altem Datum
+reg     = ^[A-Z][a-z][a-z] [A-Z][a-z][a-z] [0-3][0-9] %T %Y
+iformat = %s %b %d %T %Y
+
+# Fehlerzeilen, alles was mit ORA- beginnt
+reg     = ^ORA-
+iformat = ORA-%1 %V
+write   = V;%F %T;%h;Oracle DB [%{P,2}];alert.log;error entry new;"%z";_
+
+# Fehlerzeilen, "Corrupt block" oder "Process %s died"
+reg     =| Corrupt block|Process .* died
+iformat =  %V
+write   =  V;%F %T;%h;Oracle DB [%{P,2}];alert.log;error entry new;"%V";_
+
+reg      = ORA-
+iformat  = %isORA-%1%[ ):oMTWFS]%is
+sum_hist = 0/24hE
+write    =  V;%F %T;%h;Oracle DB [%{P,2}];alert.log;error entry count;"ORA-%1: %N";_
+
+## Tracefiles, erst mal nicht
+#reg     = ^Errors in file
+#iformat = Errors in file %1 %W
+#action  = .....

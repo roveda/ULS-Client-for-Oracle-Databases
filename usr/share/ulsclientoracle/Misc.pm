@@ -199,6 +199,9 @@
 #   Added full UTF-8 support. Thanks for the boilerplate
 #   https://stackoverflow.com/questions/6162484/why-does-modern-perl-avoid-utf-8-by-default/6163129#6163129
 #
+# 2021-12-03, 0,45, HJF:
+#   added Column-Handling and missing Elements in make_text_report
+#
 #
 # ============================================================
 
@@ -235,7 +238,7 @@ require Exporter;
 
 @EXPORT = qw(appendfile2file args2hash bytes2gb config2hash datetimestamp delta_value doc2hash docfile2hash exec_os_command fif get_config get_config2 get_value get_value_lines get_value_list has_elapsed hash2config informix_mode_text iso_datetime iso_datetime2secs local_tz_offset lockfile_build make_text_report make_value_file max maxtxt min mintxt move_logfile pround random_expression random_number rtrim scheduled show_hash sub_name sum title trim try_to_compress tz);
 
-$VERSION = 0.44;
+$VERSION = 0.45;
 
 # This one is used as timestamp marker in work files.
 my $TIMESTAMP_TXT = "T_I_M_E_S_T_A_M_P";
@@ -2187,6 +2190,9 @@ sub make_text_report {
   # LR20L15WLLRL12 => ("L", "R20", "L15W", "L", "L", "R", "L12")
   my @COLS = ($col_align =~ /([LR]\d*W?)/g);
 
+  # 211117 HJF remove unnessecary Colum-Definitions
+  while ( scalar(@COLS) > scalar(@MAXLEN) ) { pop @COLS; }
+
   # print join(",", @COLS), "\n";
 
   # Perhaps, the MAXLEN is overwritten by an explicit column width
@@ -2232,6 +2238,10 @@ sub make_text_report {
 
     for (my $i = 0; $i <= $#COLS; $i++) {
       # walk over the columns
+
+      # 211117 HJF added to prevent Error-Message while undefined Value
+      # defined $E[$i] or eval { $E[$i] = ''; printf ("%d: i:%d undefined E %s (%s)\n", __LINE__, $i, $E[$i], $line); };
+      defined $E[$i] or $E[$i] = '';
 
       if ($COLS[$i] =~ /L/) {
         # left

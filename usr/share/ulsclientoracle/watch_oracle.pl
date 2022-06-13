@@ -3,7 +3,7 @@
 # watch_oracle.pl - monitor a running Oracle database instance
 #
 # ---------------------------------------------------------
-# Copyright 2004 - 2021, roveda
+# Copyright 2004 - 2022, roveda
 #
 # This file is part of the 'ULS Client for Oracle'.
 # 
@@ -529,6 +529,23 @@
 #   Added new configuration parameter ADDITIONAL_ENCODINGS for the list of 
 #   encodings that are to be check additionally when reading alert.log lines.
 #
+# 2021-12-09      roveda      1.10
+#   Moved 'set feedback off' to beginning of sql command in exec_sql()
+#
+# 2022-01-16      roveda      1.11
+#   Added/completed sql commands in the teststep documentation for 'blocking sessions'.
+#   Optimized retrieval of audit entries by using EVENT_TIMESTAMP_UTC of view
+#   UNIFIED_AUDIT_TRAIL (Oracle 19). Corrected uninitialized values in blocking_sessions().
+#
+# 2022-03-13      roveda      1.12
+#   alert_log(): Finally ignore it if no encoding could be found for the line, output a warning.
+#   Just try to continue in raw.
+#
+# 2022-04-12      roveda      1.13
+#   Changed "info pdb - open mode" to "info pdb - cdb role - pdb open mode", and also the 
+#   values from READ WRITE/MOUNTED to PRIMARY - READ WRITE/PHYSICAL STANDBY - MOUNTED.
+#   Which allows the correct limits for stand-alone and dataguard implementations.
+#
 #
 #   Change also $VERSION later in this script!
 #
@@ -567,7 +584,7 @@ use lib ".";
 use Misc 0.44;
 use Uls2 1.17;
 
-my $VERSION = 1.09;
+my $VERSION = 1.13;
 
 # ===================================================================
 # The "global" variables
@@ -874,6 +891,8 @@ sub exec_sql {
   # If <verbose> is a true expression (e.g. a 1) the sql statement will
   # be printed to stdout.
 
+  title(sub_name());
+
   # connect / as sysdba
 
   # Set nls_territory='AMERICA' explicitly to get decimal points.
@@ -888,6 +907,7 @@ sub exec_sql {
 
   my $sql = "
     set echo off
+    set feedback off
 
     alter session set nls_territory='AMERICA';
     alter session set NLS_DATE_FORMAT='YYYY-MM-DD HH24:MI:SS';
@@ -899,7 +919,6 @@ sub exec_sql {
     set space 0
     set linesize 32000
     set pagesize 0
-    set feedback off
     set heading off
     set markup html off spool off
 
@@ -918,11 +937,12 @@ sub exec_sql {
 
     spool off;";
 
-  print "\n" . sub_name() . ": Info: executed SQL command:\n";
-  print "SQL: $sql\n-----\n";
+  print "----- SQL -----\n$sql\n---------------\n\n";
 
   # -----
   my $t0 = time;
+
+  print "----- result -----\n";
 
   if (! open(CMDOUT, "| $SQLPLUS_COMMAND")) {
     print sub_name() . ": Info: execution time:", time - $t0, "s\n";
@@ -937,7 +957,9 @@ sub exec_sql {
     return(0);
   }
 
-  print sub_name() . ": Info: execution time:", time - $t0, "s\n";
+  print "------------------\n";
+
+  print "Info: execution time:", time - $t0, "s\n";
 
   # -----
   $t0 = time;
@@ -1354,8 +1376,11 @@ sub general_pdb_info {
     # Send all values to ULS.
     uls_value($ts, "pdb name", "$pdb_name", "[ ]");
     uls_value($ts, "cdb name", "$cdb_name", "[ ]");
-    uls_value($ts, "open mode", $open_mode, "[ ]");
-    uls_value($ts, "open time", $open_time, "{DT}");
+    # uls_value($ts, "open mode", $open_mode, "[ ]");
+    uls_value($ts, "cdb role - pdb open mode", "$ORACLE_DBROLE - $open_mode", "[ ]");
+    if ($open_time) {
+      uls_value($ts, "open time", $open_time, "{DT}");
+    }
     uls_value($ts, "total size", $total_size, "GB");
     uls_value($ts, "block size", $block_size, "kB");
   }
@@ -3150,12 +3175,14 @@ sub find_codec {
 
   my $decoder = Encode::Guess->guess($str);
   if ( ref($decoder) ) { return($decoder->name) }
+  print "WARNING: Encoder not found in default encodings\n";
 
   # Check some more if nothing found
   foreach my $suspect (@ADDITIONAL_ENCODINGS) {
     $decoder = guess_encoding($str, $suspect);
     if ( ref($decoder) ) { return($decoder->name) }
   }
+  print "WARNING: Encoder not found in additional encodings\n";
 
   # If no encoding matches
   return(undef);
@@ -3205,6 +3232,7 @@ sub alert_log {
   print "File size=$fsize Bytes\n";
 
   # That's the file where the line count is stored until the next run.
+  # (This is the old file and is only used if the new file is not present)
   my $workfile = "$WORKFILEPREFIX.alert_log_position";
 
   # my $last_pos = get_value($workfile, $DELIM, "last_position");
@@ -3271,11 +3299,13 @@ sub alert_log {
 
       # Change the encoding of the line to perls internal
       my $enc = find_codec($L);
-      if ($enc !~ /ascii/i) {
-        my $destenc = 'latin1';
-        print "Changing encoding from guessed '$enc' to '$destenc'\n";
-        if ( ! from_to($L, $enc, $destenc) ) {
-          output_error_message(sub_name() . ": Error: Cannot convert [$L] from '$enc' to '$destenc'");
+      if ($enc) {
+        if ($enc !~ /ascii/i) {
+          my $destenc = 'latin1';
+          print "Changing encoding from guessed '$enc' to '$destenc'\n";
+          if ( ! from_to($L, $enc, $destenc) ) {
+            output_error_message(sub_name() . ": Error: Cannot convert [$L] from '$enc' to '$destenc'");
+          }
         }
       }
 
@@ -4528,6 +4558,20 @@ sub unified_audit_information {
   #   ORA-01017: invalid username/password; logon denied
   #   ORA-28000: the account is locked
 
+  # -----
+  # Use EVENT_TIMESTAMP_UTC from Oracle 19 onwards for better
+  # performance (benefits from partitioning).
+
+  # For Oracle up to version 12.2:
+  my $where_timerange = "where EVENT_TIMESTAMP >  to_date(:lastdt, 'yyyy-mm-dd HH24:MI:SS')
+      and EVENT_TIMESTAMP <= to_date(:currdt, 'yyyy-mm-dd HH24:MI:SS')";
+
+  # For Oracle from version 19 and later:
+  if ($ORACLE_MAJOR_VERSION >= 19 ) {
+    $where_timerange = "where EVENT_TIMESTAMP_UTC >  SYS_EXTRACT_UTC(TO_TIMESTAMP(:lastdt))
+      and EVENT_TIMESTAMP_UTC <= SYS_EXTRACT_UTC(TO_TIMESTAMP(:currdt))";
+  }
+
   $sql = "
     exec SYS.DBMS_AUDIT_MGMT.FLUSH_UNIFIED_AUDIT_TRAIL;
 
@@ -4536,6 +4580,9 @@ sub unified_audit_information {
 
     variable currdt varchar2(20)
     exec :currdt := '$curr_dt'
+
+    variable txt varchar2(10)
+    exec :txt := 'logins'
 
     variable an varchar2(5)
     exec :an := 'LOGON'
@@ -4546,16 +4593,18 @@ sub unified_audit_information {
     variable at varchar2(20)
     exec :at := 'standard'
 
-    select 'logins',
+    select :txt,
       count(case when return_code = :rc then 1 end) as successful_logins,
       count(case when return_code > :rc then 1 end) as failed_logins
     from unified_audit_trail
-    where action_name = :an
+    $where_timerange
+      and action_name = :an
       and lower(AUDIT_TYPE) = :at
-      and EVENT_TIMESTAMP >  to_date(:lastdt, 'yyyy-mm-dd HH24:MI:SS')
-      and EVENT_TIMESTAMP <= to_date(:currdt, 'yyyy-mm-dd HH24:MI:SS')
     ;
   ";
+
+  # and $eventtscol >  to_date(:lastdt, 'yyyy-mm-dd HH24:MI:SS')
+  # and $eventtscol <= to_date(:currdt, 'yyyy-mm-dd HH24:MI:SS')
 
   if (! do_sql($sql)) {return(0)}
   # successful logins
@@ -4601,11 +4650,10 @@ sub unified_audit_information {
           , DBUSERNAME
           , RETURN_CODE
         from unified_audit_trail
-        where action_name = :an
+        $where_timerange
+          and action_name = :an
           and lower(AUDIT_TYPE) = :at
           and return_code > :rc
-          and EVENT_TIMESTAMP >  to_date(:lastdt, 'yyyy-mm-dd HH24:MI:SS')
-          and EVENT_TIMESTAMP <= to_date(:currdt, 'yyyy-mm-dd HH24:MI:SS')
         order by 1,2,3
         ;
       ";
@@ -5583,6 +5631,7 @@ sub blocking_sessions {
   #
   # So that will return only one session as result.
 
+  # REPLACE(osuser, '\\', '/') the double backslash is needed by perl.
 
   $sql = "
     variable p1 varchar2(10)
@@ -5604,7 +5653,8 @@ sub blocking_sessions {
       and l1.id1 = l2.id1
       and l2.id2 = l2.id2;
 
-    select :p2, username, osuser, machine, sid, serial#, program
+    select :p2, REPLACE(username, '\\', '/'), REPLACE(osuser, '\\', '/'), REPLACE(machine, '\\', '/')
+         , sid, serial#, program
     from v\$session
     where sid in (
       select distinct final_blocking_session
@@ -5619,23 +5669,21 @@ sub blocking_sessions {
   # Number of blocked sessions
   my $blocked_count = trim(get_value($TMPOUT1, $DELIM, 'count'));
 
-  # Session that is currently blocking one or many other sessions
-  my $dbusername = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 2));
-  my $osuser     = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 3));
-  my $machine    = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 4));
-  my $sid        = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 5));
-  my $serial     = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 6));
-  my $progrm     = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 7));
-
   if ($blocked_count) {
+    # Session that is currently blocking one or many other sessions
+    my $dbusername = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 2));
+    my $osuser     = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 3));
+    my $machine    = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 4));
+    my $sid        = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 5));
+    my $serial     = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 6));
+    my $progrm     = trim(get_value($TMPOUT1, $DELIM, 'blocking_session', 7));
 
     uls_value($ts, "count", $blocked_count, '#');
 
     # Perhaps, you may not want to include the username/osuser
-    # uls_value($ts, "blocking session", "OSUSER:${osuser} / MACHINE:${machine} / DBUSER:$dbusername / SID,SERIAL#:$sid,$serial", '[ ]');
-    # uls_value($ts, "blocking session", "${osuser} @ ${machine} / $dbusername / SID,SERIAL#: $sid,$serial", '[ ]');
     uls_value($ts, "blocking session", "${osuser} @ ${machine} / $dbusername / $progrm / SID,SERIAL#: $sid,$serial", '[ ]');
 
+    # Currently disabled:
     # blocked_objects($ts);
 
   } else {
@@ -5649,7 +5697,7 @@ sub blocking_sessions {
 
 
 # ===================================================================
-# main
+# main 
 # ===================================================================
 #
 # initial customization, no output should happen before this.
@@ -7469,32 +7517,41 @@ If necessary, you must kill the appropriate session by using command:
 
   ALTER SYSTEM KILL SESSION 'sid,serial#' immediate;
 
-Replace 'sid' and 'serial#' by the values that you find in 'blocking session'.
+Replace 'sid' and 'serial#' by the values that you find in the output of the sql below.
 
 You must check repetitively for further sessions that moved up and which are blocking again other sessions.
 Use the command:
 
+
+  set pagesize 100
+  set linesize 180
+  col username format a20
+  col osuser format a40
+  col machine format a30
+
   SELECT username, osuser, machine, sid, serial#  from v$session
   where sid in (select distinct FINAL_BLOCKING_SESSION from v$session
-                where final_blocking_session_status = 'VALID');
+                where final_blocking_session_status = 'VALID')
+  order by 1, 2, 3;
 
 and kill those session likewise.
 
 And/or this command to show all blocked sessions:
 
-  set linesize 160
-  col "DB user/OS user(machine) (SID,SERIAL#) is blocking" format a60
-  col "DB user/OS user(machine) (SID) is blocked" format a60
+  set pagesize 1000
+  set linesize 180
+  col "this session is blocking" format a80
+  col "this session is blocked" format a80
 
   select 
-    s1.username || '/' || s1.osuser || '(' || s1.machine || ') (SID,SERIAL# = ' || s1.sid || ',' || s1.serial# || ')' AS "DB user/OS user(machine) (SID,SERIAL#) is blocking"
-  , s2.username || '/' || s2.osuser || '(' || s2.machine || ') (SID=' || s2.sid || ') ' AS "DB user/OS user(machine) (SID) is blocked"
+    s1.username || '/' || s1.osuser || '(' || s1.machine || ') (SID,SERIAL# = ' || s1.sid || ',' || s1.serial# || ')' AS "this session is blocking"
+  , s2.username || '/' || s2.osuser || '(' || s2.machine || ') (SID=' || s2.sid || ') ' AS "this session is blocked"
   from v$lock l1, v$session s1, v$lock l2, v$session s2
   where s1.sid=l1.sid and s2.sid=l2.sid
     and l1.BLOCK=1 and l2.request > 0
     and l1.id1 = l2.id1
-    and l2.id2 = l2.id2;
-
+    and l2.id2 = l2.id2
+  order by 1;
 
 count:
   The number of blocked sessions.

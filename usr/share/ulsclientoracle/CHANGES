@@ -1,4 +1,19 @@
 %changelog
+* Fri Feb 25 2022 Roveda <roveda@universal-logging-system.org> 1.0-35
+2022-02-25: Added encoding guessing in Uls2.pm.
+2022-02-01: Added lfa4uls functionality to process the alert.log.
+
+* Sun Jan 16 2022 Roveda <roveda@universal-logging-system.org> 1.0-34
+2022-01-16: watch_oracle.pl: added documentation, optimized access to 
+audit entries by using EVENT_TIMESTAMP_UTC.
+
+* Thu Dec 09 2021 Roveda <roveda@universal-logging-system.org> 1.0-33
+2021-12-09: Moved 'set feedback off' to beginnning of sql commands and 
+changed print output in sub exec_sql() in all perl scripts.
+Unsetting SQLPATH and ORACLE_PATH in all bash scripts after having sourced the environment file
+to avoid executing the login.sql which may include unwanted settings.
+2021-12-06: Implemented the changes from HJF into Misc.pm
+
 * Sat Dec 04 2021 Roveda <roveda@universal-logging-system.org> 1.0-32
 2021-12-04: New parameter ADDITIONAL_ENCODINGS in etc/uls/oracle/standard.conf.
 Implemented this parameter in watch_oracle.pl to allow customizing of additional
