@@ -1,4 +1,11 @@
 %changelog
+* Tue Jun 21 2022 Roveda <roveda@universal-logging-system.org> 1.0-37
+2022-06-21: Added BLOCKING_SESSIONS_ALWAYS to configuration file and incorporation in 
+watch_oracle.pl, blocking_sessions() (github issue #11).
+
+* Tue Apr 12 2022 Roveda <roveda@universal-logging-system.org> 1.0-36
+2022-04-12: Changed 'Info PDB - open mode' to 'Info PDB - cdb role - pdb open mode' in watch_oracle.pl.
+
 * Fri Feb 25 2022 Roveda <roveda@universal-logging-system.org> 1.0-35
 2022-02-25: Added encoding guessing in Uls2.pm.
 2022-02-01: Added lfa4uls functionality to process the alert.log.

@@ -546,6 +546,10 @@
 #   values from READ WRITE/MOUNTED to PRIMARY - READ WRITE/PHYSICAL STANDBY - MOUNTED.
 #   Which allows the correct limits for stand-alone and dataguard implementations.
 #
+# 2022-06-21      roveda      1.14
+#   Added the option BLOCKING_SESSIONS_ALWAYS to the configuration file and 
+#   in sub blocking_sessions() to optionally send zero blocking sessions to 
+#   ULS (if e.g. needed for aggregations).
 #
 #   Change also $VERSION later in this script!
 #
@@ -584,7 +588,7 @@ use lib ".";
 use Misc 0.44;
 use Uls2 1.17;
 
-my $VERSION = 1.13;
+my $VERSION = 1.14;
 
 # ===================================================================
 # The "global" variables
@@ -5688,7 +5692,12 @@ sub blocking_sessions {
 
   } else {
     print "No blocking sessions found.\n";
-    # uls_value($ts, "count", 0, '#');
+
+    if ($OPTIONS =~ /BLOCKING_SESSIONS_ALWAYS,/) {
+      # Always send the number of blocking sessions to ULS
+      # even if it is zero.
+      uls_value($ts, "count", 0, '#');
+    }
   }
 
   send_doc($ts);
